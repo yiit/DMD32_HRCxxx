@@ -1748,13 +1748,13 @@ Serial1.begin(115200, SERIAL_8N1, 17, 16);
   } else {
     Serial.println("ESP-NOW Baslatildi!");
 #ifdef HRCMINI
-	//ShowOnDisplay("ENDUTEK");
+	ShowOnDisplay("ENDUTEK");
   //ShowOnDisplay("ATASAN");
 	//ShowOnDisplay("ELMASLAR");
   //ShowOnDisplay("ENDER BASKUL");
 	//ShowOnDisplay("ARI BASKUL");
 	//ShowOnDisplay("CAS");
-	ShowOnDisplay("BILTER");
+	//ShowOnDisplay("BILTER");
 	//ShowOnDisplay("OLGUN BASKUL");
 	//ShowOnDisplay("SELES");
 	//ShowOnDisplay("LINEER TARTI");
