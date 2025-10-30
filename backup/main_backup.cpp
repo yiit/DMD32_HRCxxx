@@ -13,19 +13,7 @@
 //#define MODBUS_RTU
 /*COMMUNICATION*/
 
-/*MODEL*/
-#define MODEL "HRCMINI"
-/*MODEL*/
-
 //#define LEADER
-
-// Debug sistemi - Global olarak en üstte tanımlanmalı
-bool debugEnabled = true; // Başlangıçta açık
-
-// Debug makroları
-#define DEBUG_PRINT(x) if(debugEnabled) { Serial.print(x); }
-#define DEBUG_PRINTLN(x) if(debugEnabled) { Serial.println(x); }
-#define DEBUG_PRINTF(...) if(debugEnabled) { Serial.printf(__VA_ARGS__); }
 
 #include <Arduino.h>
 
@@ -76,50 +64,6 @@ int16_t textWidth; // Yazının genişliği (piksel)
 
 #endif
 
-// --- ESP-NOW message structure and parser -------------------------------------------------
-// Expected message format (pipe-separated):
-// NAME|MODEL|RSSI|CMD|DATA
-// Example: "HRCMINI|DMD32_HRC| -42 |DISPLAY|Merhaba"
-
-typedef struct {
-  String name;   // device name (same as SSID)
-  String model;  // model name
-  int rssi;      // signal strength (optional, -128 if unknown)
-  String cmd;    // command
-  String data;   // payload to display
-} EspNowMessage;
-
-// Parse a pipe-separated payload into EspNowMessage. Returns true on success.
-bool parseEspNowMessage(const char *payload, int len, EspNowMessage &msg) {
-  if (payload == nullptr || len <= 0) return false;
-  String s = String(payload).substring(0, len);
-  
-  // Yeni format kontrolü: NAME|MODEL|RSSI|CMD|DATA (5 parça olmalı)
-  // Find first four separators. DATA may contain pipes, so extract first 4 splits only.
-  int p1 = s.indexOf('|');
-  if (p1 < 0) return false; // Hiç | yoksa false döndür
-  
-  int p2 = s.indexOf('|', p1 + 1);
-  int p3 = s.indexOf('|', p2 + 1);
-  int p4 = s.indexOf('|', p3 + 1);
-  
-  // Eğer 4 tane | varsa yeni format
-  if (p2 > 0 && p3 > 0 && p4 > 0) {
-    msg.name = s.substring(0, p1);
-    msg.model = s.substring(p1 + 1, p2);
-    String rssiStr = s.substring(p2 + 1, p3);
-    rssiStr.trim();
-    if (rssiStr.length() == 0) msg.rssi = -128;
-    else msg.rssi = rssiStr.toInt();
-    msg.cmd = s.substring(p3 + 1, p4);
-    msg.data = s.substring(p4 + 1);
-    return true;
-  }
-  
-  return false; // Yeni format değilse false döndür
-}
-
-
 #ifdef HRCNANO
 #include <Arduino.h>
 #include "ESP32_LED_64x16_Matrix.h"
@@ -157,8 +101,8 @@ uint16_t res[2];
 
 bool cb(Modbus::ResultCode event, uint16_t transactionId, void* data) { // Callback to monitor errors
   if (event != Modbus::EX_SUCCESS) {
-    DEBUG_PRINT("Request result: 0x");
-    DEBUG_PRINT(event, HEX);
+    Serial.print("Request result: 0x");
+    Serial.print(event, HEX);
   }
   return true;
 }*/
@@ -186,7 +130,6 @@ Preferences preferences;
 #ifdef ESPNOW
 #include <esp_now.h>
 #include <WiFi.h>
-#include <esp_wifi.h>
 
 
 bool Serial1_mod = false;
@@ -216,9 +159,6 @@ esp_now_peer_info_t peerInfo;
 unsigned long buttonPressStartTime = 0; // Butona basılma baslangıc zamanı
 bool buttonPressed = false;
 
-// Last received RSSI value
-int lastReceivedRSSI = -50; // Default RSSI değeri
-
 #endif
 
 #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
@@ -230,6 +170,7 @@ int lastReceivedRSSI = -50; // Default RSSI değeri
 #include "fonts/Arial_Black_16.h"
 #include "fonts/SystemFont5x7.h"
 #include "fonts/SystemFont5x7_ENDUTEK.h"
+
 
 // DMD ayarları
 #if defined (HRCMESAJ)
@@ -268,12 +209,12 @@ void IRAM_ATTR triggerScan() {
 // WiFi islemleri sırasında DMD taramayı durdurup tekrar baslatma
 void pauseDMD() {
   timerAlarmDisable(timer);  // DMD tarama zamanlayıcısını durdurun
-  DEBUG_PRINTLN("DMD tarama durduruldu");
+  Serial.println("DMD tarama durduruldu");
 }
 
 void resumeDMD() {
   timerAlarmEnable(timer);  // DMD tarama zamanlayıcısını tekrar baslatın
-  DEBUG_PRINTLN("DMD tarama yeniden baslatıldı");
+  Serial.println("DMD tarama yeniden baslatıldı");
 }
 
 #if defined(HRCZAMAN)
@@ -498,8 +439,8 @@ bool displayMessageQueued = false;
 // Startup message sequence
 unsigned long startupMessageTimer = 0;
 int startupMessageIndex = -1;
-String startupMessages[] = {"HRCMINI", " BILTER"};
-int startupMessagesCount = 2;
+String startupMessages[] = {"HRCMINI", "ENDUTEK", "CONNECTION_CHECK"};
+int startupMessagesCount = 3;
 
 // Connection status tracking
 bool lastConnectionStatus = false;
@@ -514,11 +455,11 @@ void ShowOnDisplay(String message) {
     
     // ENDUTEK ve uzun mesajlar için kayan yazı kontrolü
     bool needsScrolling = false;
-    if (message == " BILTER" || (!isESPNOWMessage && message != "HATA" && message != "HRCMINI")) {
-        //  BILTER her zaman kayan yazı
-        if (message == " BILTER") {
+    if (message == "ENDUTEK" || (!isESPNOWMessage && message != "HATA" && message != "HRCMINI")) {
+        // ENDUTEK her zaman kayan yazı
+        if (message == "ENDUTEK") {
             needsScrolling = true;
-            //DEBUG_PRINTLN(" BILTER - forced scroll animation");
+            Serial.println("ENDUTEK - forced scroll animation");
         } else {
             // Diğer mesajlar için genişlik kontrolü
             int textWidth = message.length() * 6;  // Her karakter ~6 pixel
@@ -526,9 +467,9 @@ void ShowOnDisplay(String message) {
             
             if (textWidth > displayWidth) {
                 needsScrolling = true;
-                //Serial.println("Text too wide (" + String(textWidth) + "px > " + String(displayWidth) + "px), using scroll");
+                Serial.println("Text too wide (" + String(textWidth) + "px > " + String(displayWidth) + "px), using scroll");
             } else {
-                DEBUG_PRINTLN("Text fits (" + String(textWidth) + "px <= " + String(displayWidth) + "px), using static");
+                Serial.println("Text fits (" + String(textWidth) + "px <= " + String(displayWidth) + "px), using static");
             }
         }
     }
@@ -537,20 +478,20 @@ void ShowOnDisplay(String message) {
     if (message == "HATA" || message == "HRCMINI" || isESPNOWMessage || !needsScrolling) {
         // Static göster (sola yaslanmış)
         display.displayText(message.c_str(), PA_LEFT, 0, 0, PA_PRINT, PA_NO_EFFECT);
-        //Serial.println("Static message set (LEFT aligned) - blocking animate...");
+        Serial.println("Static message set (LEFT aligned) - blocking animate...");
         // BLOCKING animate
         unsigned long timeout = millis() + 2000;
         while (!display.displayAnimate() && millis() < timeout) {
             delay(50);
         }
-        //DEBUG_PRINTLN("Static animation completed");
+        Serial.println("Static animation completed");
     } else {
           // Ekranı temizle
         display.displayClear();
         display.displayReset(); 
         // Uzun mesajlar scroll göster
         display.displayText(message.c_str(), PA_CENTER, 60, 0, PA_SCROLL_LEFT, PA_SCROLL_LEFT);
-        //DEBUG_PRINTLN("Scroll message set - blocking animate...");
+        Serial.println("Scroll message set - blocking animate...");
         // BLOCKING animate - max 5 saniye
         unsigned long timeout = millis() + 5000;
         int animCount = 0;
@@ -558,10 +499,10 @@ void ShowOnDisplay(String message) {
             delay(30);
             animCount++;
             if (animCount % 20 == 0) {
-                //Serial.println("Animation step: " + String(animCount));
+                Serial.println("Animation step: " + String(animCount));
             }
         }
-        //Serial.println("Scroll animation completed after " + String(animCount) + " steps");
+        Serial.println("Scroll animation completed after " + String(animCount) + " steps");
     }
     
     currentDisplayMessage = message;
@@ -766,7 +707,6 @@ const char* upload_html = R"rawliteral(
           <span class="icon">📶</span>
           Wi-Fi Ayarları
         </div>
-        
         <form onsubmit="updateSettings(); return false;">
           <div class="form-group">
             <label class="form-label">SSID (Ağ Adı)</label>
@@ -790,7 +730,7 @@ const char* upload_html = R"rawliteral(
         </div>
         <div class="form-group">
           <button onclick="startPairing()" class="btn btn-success" style="width: 100%;">
-            <span>�</span> Cihaz Tarama Başlat
+            <span>🔄</span> Cihaz Tarama Başlat
           </button>
         </div>
         <div class="form-group">
@@ -818,23 +758,6 @@ const char* upload_html = R"rawliteral(
         <button onclick="saveBrightness()" class="btn btn-warning">
           <span>💡</span> Parlaklığı Kaydet
         </button>
-      </div>
-
-      <!-- Debug Ayarları -->
-      <div class="card">
-        <div class="card-title">
-          <span class="icon">🐛</span>
-          Debug Sistemi
-        </div>
-        <div class="form-group">
-          <label class="form-label">Serial Debug Mesajları</label>
-          <div style="display: flex; align-items: center; gap: 10px; margin-top: 8px;">
-            <button id="debugToggle" onclick="toggleDebug()" class="btn">
-              <span id="debugIcon">🟢</span> <span id="debugText">Açık</span>
-            </button>
-            <span id="debugStatus" style="color: #27ae60; font-weight: bold;">Debug mesajları aktif</span>
-          </div>
-        </div>
       </div>
 
       <!-- Firmware Güncelleme -->
@@ -956,7 +879,7 @@ const char* upload_html = R"rawliteral(
       <div class="table-container">
         <table>
           <thead>
-            <tr><th>MAC Adresi</th><th>Name</th><th>Model</th><th>RSSI</th><th>Durum</th><th>İşlemler</th></tr>
+            <tr><th>MAC Adresi</th><th>Durum</th><th>Son Görülme</th><th>İşlemler</th></tr>
           </thead>
           <tbody id="pairedDevices"></tbody>
         </table>
@@ -972,7 +895,7 @@ const char* upload_html = R"rawliteral(
       <div class="table-container">
         <table>
           <thead>
-            <tr><th>MAC Adresi</th><th>Name</th><th>Model</th><th>RSSI</th><th>Durum</th><th>İşlemler</th></tr>
+            <tr><th>MAC Adresi</th><th>Sinyal Gücü</th><th>Durum</th><th>İşlemler</th></tr>
           </thead>
           <tbody id="discoveredDevices"></tbody>
         </table>
@@ -1003,14 +926,10 @@ const char* upload_html = R"rawliteral(
 let currentAction = null;
 let currentActionData = null;
 let dataUpdateInterval;
-let deviceInfo = {}; // MAC -> {name, model, rssi} mapping
 
 // Sayfa yüklendiğinde başlat
 document.addEventListener('DOMContentLoaded', function() {
   fetchDevices();
-  loadBrightness(); // Parlaklık ayarını yükle
-  loadDebugStatus(); // Debug durumunu yükle
-  loadSSID(); // SSID ayarını yükle
   startDataMonitoring();
   setInterval(fetchDevices, 3000);
 });
@@ -1100,88 +1019,21 @@ function saveBrightness() {
   .catch(() => showNotification('Parlaklık ayarlama hatası!', 'error'));
 }
 
-// Debug sistemi
-function toggleDebug() {
-  const currentState = document.getElementById('debugText').textContent === 'Açık';
-  const newState = !currentState;
-  
-  showNotification(`Debug ${newState ? 'açılıyor' : 'kapatılıyor'}...`, 'warning');
-  
-  fetch('/set_debug', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `enabled=${newState}`
-  })
-  .then(() => {
-    updateDebugUI(newState);
-    showNotification(`Debug ${newState ? 'açıldı' : 'kapatıldı'}!`, 'success');
-  })
-  .catch(() => showNotification('Debug ayarlama hatası!', 'error'));
-}
-
-function updateDebugUI(enabled) {
-  const icon = document.getElementById('debugIcon');
-  const text = document.getElementById('debugText');
-  const status = document.getElementById('debugStatus');
-  const button = document.getElementById('debugToggle');
-  
-  if (enabled) {
-    icon.textContent = '🟢';
-    text.textContent = 'Açık';
-    status.textContent = 'Debug mesajları aktif';
-    status.style.color = '#27ae60';
-    button.className = 'btn btn-success';
-  } else {
-    icon.textContent = '🔴';
-    text.textContent = 'Kapalı';
-    status.textContent = 'Debug mesajları kapalı';
-    status.style.color = '#e74c3c';
-    button.className = 'btn btn-danger';
-  }
-}
-
-async function loadDebugStatus() {
-  try {
-    const response = await fetch('/get_debug');
-    const enabled = (await response.text()) === 'true';
-    updateDebugUI(enabled);
-    console.log('✅ Debug durumu yüklendi:', enabled);
-  } catch (error) {
-    console.error('❌ Debug durumu yüklenemedi:', error);
-    updateDebugUI(true); // Hata durumunda varsayılan açık
-  }
-}
-
-// SSID ayarını yükle
-async function loadSSID() {
-  try {
-    const response = await fetch('/get_ssid');
-    const ssid = await response.text();
-    
-    document.getElementById('ssidInput').value = ssid;
-    
-    console.log('✅ SSID yüklendi:', ssid);
-  } catch (error) {
-    console.error('❌ SSID yüklenemedi:', error);
-    document.getElementById('ssidInput').placeholder = "SSID yüklenemedi";
-  }
-}
-
 // ESP-NOW işlemleri
 function startPairing() {
   showModal(
-    '� Cihaz Tarama Başlat',
-    'Çevredeki ESP-NOW cihazları taransın mı? Bu işlem birkaç saniye sürer.',
+    '🔄 Cihaz Tarama',
+    'ESP-NOW cihaz tarama başlatılsın mı? Bu işlem birkaç saniye sürer.',
     function() {
-      showNotification('📡 Çevredeki cihazlar taranıyor...', 'warning');
+      showNotification('Cihaz tarama başlatıldı...', 'warning');
       
       fetch('/start_pairing', { method: 'POST' })
         .then(r => r.text())
         .then(response => {
-          showNotification('✅ Cihaz tarama tamamlandı', 'success');
-          setTimeout(fetchDevices, 2000); // 2 saniye sonra listeyi güncelle
+          showNotification(`Tarama tamamlandı: ${response}`, 'success');
+          fetchDevices();
         })
-        .catch(() => showNotification('❌ Tarama başlatma hatası!', 'error'));
+        .catch(() => showNotification('Tarama başlatma hatası!', 'error'));
     }
   );
 }
@@ -1224,103 +1076,39 @@ function deleteMac(mac) {
     '🗑️ Cihaz Sil',
     `MAC adresi "${mac}" hafızadan silinecek. Bu işlem geri alınamaz!`,
     function() {
-      showNotification('Cihaz siliniyor...', 'warning');
-      
       fetch('/delete_mac', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `mac=${encodeURIComponent(mac)}`
+        body: `mac=${mac}`
       })
-      .then(response => response.text())
-      .then(responseText => {
-        console.log('Delete response:', responseText);
-        showNotification('✅ Cihaz hafızadan silindi: ' + mac, 'success');
-        setTimeout(fetchDevices, 1000); // 1 saniye bekle, sonra listeyi güncelle
+      .then(() => {
+        showNotification('Cihaz hafızadan silindi!', 'success');
+        fetchDevices();
       })
-      .catch(error => {
-        console.error('Delete error:', error);
-        showNotification('❌ Cihaz silme hatası!', 'error');
-      });
+      .catch(() => showNotification('Cihaz silme hatası!', 'error'));
     }
   );
 }
 
 function pairMac(mac) {
-  console.log('🎯 pairMac çağrıldı, MAC:', mac);
-  
   showModal(
     '🤝 Cihaz Eşleştir',
     `MAC adresi "${mac}" ile eşleştirme yapılacak. Devam edilsin mi?`,
     function() {
-      console.log('📤 Eşleştirme isteği gönderiliyor...');
       showNotification('Eşleştirme isteği gönderiliyor...', 'warning');
       
       fetch('/pair_request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `mac=${encodeURIComponent(mac)}`
+        body: `mac=${mac}`
       })
-      .then(response => {
-        console.log('✅ Pair request yanıt:', response.status);
-        return response.text();
+      .then(() => {
+        showNotification('Eşleştirme isteği gönderildi!', 'success');
+        fetchDevices();
       })
-      .then(responseText => {
-        console.log('📝 Yanıt metni:', responseText);
-        showNotification('✅ Eşleştirme isteği gönderildi!', 'success');
-        setTimeout(fetchDevices, 1000);
-      })
-      .catch(error => {
-        console.error('❌ Eşleştirme hatası:', error);
-        showNotification('❌ Eşleştirme hatası!', 'error');
-      });
+      .catch(() => showNotification('Eşleştirme hatası!', 'error'));
     }
   );
-}
-
-// ESP-NOW mesajını parse et ve device info güncelle
-function parseEspNowMessage(message, mac) {
-  // SCAN_RESPONSE format: SCAN_RESPONSE|NODE:HRC_1|MODEL:HRCMINI|VER:v1.0.0
-  if (message.startsWith('SCAN_RESPONSE')) {
-    const parts = message.split('|');
-    let name = 'Unknown', model = 'Unknown', version = 'Unknown';
-    
-    parts.forEach(part => {
-      if (part.startsWith('NODE:')) name = part.substring(5);
-      if (part.startsWith('MODEL:')) model = part.substring(6);
-      if (part.startsWith('VER:')) version = part.substring(4);
-    });
-    
-    deviceInfo[mac] = {
-      name: name,
-      model: model,
-      rssi: '-',
-      version: version,
-      lastSeen: new Date().toLocaleTimeString()
-    };
-    return;
-  }
-  
-  // Format: NAME|MODEL|RSSI|CMD|DATA veya sadece data  
-  const parts = message.split('|');
-  if (parts.length >= 4) {
-    // Yeni format: NAME|MODEL|RSSI|CMD|DATA
-    deviceInfo[mac] = {
-      name: parts[0],
-      model: parts[1], 
-      rssi: parts[2],
-      lastSeen: new Date().toLocaleTimeString()
-    };
-  } else {
-    // Eski format: sadece data
-    if (!deviceInfo[mac]) {
-      deviceInfo[mac] = {
-        name: 'Unknown',
-        model: 'Legacy',
-        rssi: '-',
-        lastSeen: new Date().toLocaleTimeString()
-      };
-    }
-  }
 }
 
 // Cihaz listesini güncelle
@@ -1334,7 +1122,7 @@ async function fetchDevices() {
     pairedTable.innerHTML = '';
     
     if (paired.length === 0) {
-      pairedTable.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #7f8c8d;">Henüz eşleşmiş cihaz yok</td></tr>';
+      pairedTable.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #7f8c8d;">Henüz eşleşmiş cihaz yok</td></tr>';
     } else {
       paired.forEach(device => {
         const row = document.createElement('tr');
@@ -1342,15 +1130,10 @@ async function fetchDevices() {
         const statusText = device.active ? '🟢 Çevrimiçi' : '🔴 Çevrimdışı';
         const lastSeen = device.lastSeen || 'Bilinmiyor';
         
-        // Device info'yu al
-        const info = deviceInfo[device.mac] || { name: '-', model: '-', rssi: '-' };
-        
         row.innerHTML = `
           <td><code>${device.mac}</code></td>
-          <td><strong>${info.name}</strong></td>
-          <td><span style="background: #3498db; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px;">${info.model}</span></td>
-          <td><span style="color: ${info.rssi !== '-' ? (parseInt(info.rssi) > -50 ? 'green' : parseInt(info.rssi) > -70 ? 'orange' : 'red') : '#7f8c8d'}">${info.rssi !== '-' ? info.rssi + ' dBm' : '-'}</span></td>
           <td><span class="status ${statusClass}">${statusText}</span></td>
+          <td>${lastSeen}</td>
           <td>
             <button onclick="deleteMac('${device.mac}')" class="btn btn-small btn-danger">
               <span>🗑️</span> Sil
@@ -1366,59 +1149,27 @@ async function fetchDevices() {
     discoveredTable.innerHTML = '';
     
     if (discovered.length === 0) {
-      discoveredTable.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #7f8c8d;">Çevrede cihaz bulunamadı</td></tr>';
+      discoveredTable.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #7f8c8d;">Çevrede cihaz bulunamadı</td></tr>';
     } else {
       discovered.forEach(device => {
         const row = document.createElement('tr');
         const signalStrength = device.rssi ? `${device.rssi} dBm` : 'Bilinmiyor';
         
-        // Device info'yu al
-        const info = deviceInfo[device.mac] || { name: '-', model: '-', rssi: '-' };
-        
-        // Bu cihaz zaten eşleşmiş mi kontrol et
-        const isAlreadyPaired = paired.some(pairedDevice => pairedDevice.mac === device.mac);
-        
-        const statusHtml = isAlreadyPaired 
-          ? '<span class="status status-online">✅ Zaten Eşleşmiş</span>'
-          : '<span class="status status-discovered">🆕 Keşfedildi</span>';
-          
-        const buttonHtml = isAlreadyPaired
-          ? '<span style="color: #7f8c8d; font-size: 12px;">Zaten eşleşmiş</span>'
-          : `<button onclick="pairMac('${device.mac}')" class="btn btn-small btn-success">
-               <span>🤝</span> Eşleştir
-             </button>`;
-        
         row.innerHTML = `
           <td><code>${device.mac}</code></td>
-          <td><strong>${info.name}</strong></td>
-          <td><span style="background: #3498db; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px;">${info.model}</span></td>
-          <td><span style="color: ${info.rssi !== '-' ? (parseInt(info.rssi) > -50 ? 'green' : parseInt(info.rssi) > -70 ? 'orange' : 'red') : '#7f8c8d'}">${info.rssi !== '-' ? info.rssi + ' dBm' : signalStrength}</span></td>
-          <td>${statusHtml}</td>
-          <td>${buttonHtml}</td>
+          <td>${signalStrength}</td>
+          <td><span class="status status-discovered">🆕 Keşfedildi</span></td>
+          <td>
+            <button onclick="pairMac('${device.mac}')" class="btn btn-small btn-success">
+              <span>🤝</span> Eşleştir
+            </button>
+          </td>
         `;
         discoveredTable.appendChild(row);
       });
     }
   } catch (error) {
     console.error('Cihaz listesi alınamadı:', error);
-  }
-}
-
-// Parlaklık ayarını yükle
-async function loadBrightness() {
-  try {
-    const response = await fetch('/get_brightness');
-    const brightness = parseInt(await response.text());
-    
-    document.getElementById('brightnessSlider').value = brightness;
-    document.getElementById('brightnessValue').textContent = brightness;
-    
-    console.log('✅ Parlaklık yüklendi:', brightness + '%');
-  } catch (error) {
-    console.error('❌ Parlaklık yüklenemedi:', error);
-    // Hata durumunda varsayılan değeri ayarla
-    document.getElementById('brightnessSlider').value = 50;
-    document.getElementById('brightnessValue').textContent = 50;
   }
 }
 
@@ -1492,20 +1243,7 @@ function fetchDataLogs() {
     .then(response => response.json())
     .then(data => {
       if (data.data && data.data.length > 0) {
-        data.data.forEach(entry => {
-          addEspnowDataLine(entry.type, entry.message, entry.timestamp);
-          
-          // Gelen mesajları parse et ve device info güncelle
-          if (entry.type === 'in') {
-            // "From MAC: message" formatından MAC ve mesajı ayır
-            const match = entry.message.match(/From ([A-F0-9:]+): (.+)/);
-            if (match) {
-              const mac = match[1];
-              const message = match[2];
-              parseEspNowMessage(message, mac);
-            }
-          }
-        });
+        data.data.forEach(entry => addEspnowDataLine(entry.type, entry.message, entry.timestamp));
       }
     })
     .catch(() => {
@@ -1820,52 +1558,17 @@ const char* upload_html = R"(
 #endif
 
 void SaveSSID(const String& ssid) {
-  DEBUG_PRINTF("💾 SSID kaydediliyor: '%s'\n", ssid.c_str());
-  
   preferences.begin("wifi", false);
-  size_t written = preferences.putString("ssid", ssid);
-  preferences.end();
-  
-  DEBUG_PRINTF("✅ SSID kaydedildi, %zu bytes yazıldı\n", written);
-  
-  // Kayıt kontrolü
-  preferences.begin("wifi", true);
-  String verify = preferences.getString("ssid", "KAYIT_BASARISIZ");
-  preferences.end();
-  
-  DEBUG_PRINTF("🔍 Kayıt kontrolü: '%s'\n", verify.c_str());
-}
-
-void SavePassword(const String& password) {
-  preferences.begin("wifi", false);
-  preferences.putString("password", password);
+  preferences.putString("ssid", ssid);
   preferences.end();
 }
 
 // Gizli AP modu baslat ve IP adresini 192.168.4.1 olarak ayarla
 void startHiddenAP() {
 
-  DEBUG_PRINTLN("🔍 WiFi preferences kontrol ediliyor...");
-  
   preferences.begin("wifi", true);
-  
-  // Preferences debug
-  size_t ssidLen = preferences.getBytesLength("ssid");
-  size_t passLen = preferences.getBytesLength("password");
-  DEBUG_PRINTF("📊 Preferences boyutları - SSID: %zu bytes, Password: %zu bytes\n", ssidLen, passLen);
-  
   String savedSSID = preferences.getString("ssid", "HRC_DEFAULT");
-  String savedPassword = preferences.getString("password", "teraziwifi");
   preferences.end();
-  
-  DEBUG_PRINTF("🌐 AP Başlatılıyor - SSID: '%s' (len: %d), Şifre: '%s' (len: %d)\n", 
-                savedSSID.c_str(), savedSSID.length(),
-                savedPassword.c_str(), savedPassword.length());
-  
-  // Eğer varsayılan değer dönüyorsa manuel kontrol
-  if (savedSSID == "HRC_DEFAULT") {
-    DEBUG_PRINTLN("⚠️ Varsayılan SSID kullanılıyor, preferences boş olabilir!");
-  }
   // Gizli (SSID yayınlamayan) bir Access Point baslatma
   //WiFi.softAP(ssid, password, 1, 1);  // Gizli mod aktif
 
@@ -1877,29 +1580,21 @@ void startHiddenAP() {
 	Serial.println("AP-STA MOD BASARISIZ!");
   }
   
-  while (!WiFi.softAP(savedSSID.c_str(), savedPassword.c_str())) {
+  while (!WiFi.softAP(savedSSID.c_str(), password)) {
     Serial.println("AP-STA SSID BASARISIZ!");
     return;
   }
-  
-  DEBUG_PRINTF("✅ AP başarıyla oluşturuldu - SSID: '%s'\n", savedSSID.c_str());
 
   // AP-STA IP yapılandırmasını ayarla
   while (!WiFi.softAPConfig(local_IP, gateway, subnet)) {
     Serial.println("AP-STA KOFIGURASYON BASARISIZ!");
     return;
   }
-  
-  DEBUG_PRINTF("✅ AP IP yapılandırması tamamlandı: %s\n", WiFi.softAPIP().toString().c_str());
 
   // Sabit IP adresini seri monitore yazdır
-  //DEBUG_PRINTLN("Gizli AP baslatıldı!");
-  //DEBUG_PRINT("AP IP Adresi: ");
-  //Serial.println(WiFi.softAPIP());
-  
-  // TX Power ayarla - WiFi AP için de maksimum güç
-  WiFi.setTxPower(WIFI_POWER_19_5dBm); // Maksimum güç
-  //DEBUG_PRINTLN("📡 WiFi AP TX Power ayarlandi: 19.5 dBm");
+  Serial.println("Gizli AP baslatıldı!");
+  Serial.print("AP IP Adresi: ");
+  Serial.println(WiFi.softAPIP());
 }
 
 #ifdef ESPNOW
@@ -1912,7 +1607,7 @@ void updatePeerStatus(const uint8_t *mac_addr, bool active) {
   for (int i = 0; i < peerStatusCount; i++) {
     if (memcmp(peerStatusList[i].mac, mac_addr, 6) == 0) {
       if (peerStatusList[i].active != active) {
-        DEBUG_PRINTF("📊 Peer status değişti: %s -> %s\n", macStr, active ? "ACTIVE" : "INACTIVE");
+        Serial.printf("📊 Peer status değişti: %s -> %s\n", macStr, active ? "ACTIVE" : "INACTIVE");
       }
       peerStatusList[i].active = active;
       return;
@@ -1923,7 +1618,7 @@ void updatePeerStatus(const uint8_t *mac_addr, bool active) {
     memcpy(peerStatusList[peerStatusCount].mac, mac_addr, 6);
     peerStatusList[peerStatusCount].active = active;
     peerStatusCount++;
-    DEBUG_PRINTF("📊 Yeni peer eklendi: %s -> %s\n", macStr, active ? "ACTIVE" : "INACTIVE");
+    Serial.printf("📊 Yeni peer eklendi: %s -> %s\n", macStr, active ? "ACTIVE" : "INACTIVE");
   }
 }
 
@@ -1961,57 +1656,9 @@ void LoadPairedMac() {
 }
 
 void RemovePairedMac(const char* macStr) {
-  DEBUG_PRINTF("🔍 MAC silme işlemi başlıyor: %s\n", macStr);
-  
-  // Önce preferences'tan güncel verileri oku
-  preferences.begin("espnow", false);
-  pairedDeviceCount = preferences.getBytesLength("paired_mac") / 6;
-  if (pairedDeviceCount > MAX_PAIRED_DEVICES) pairedDeviceCount = MAX_PAIRED_DEVICES;
-  preferences.getBytes("paired_mac", pairedMacList, pairedDeviceCount * 6);
-  preferences.end();
-  
-  DEBUG_PRINTF("🔢 Preferences'tan okunan cihaz sayısı: %d\r\n", pairedDeviceCount);
-  
-  // Mevcut MAC listesini göster
-  DEBUG_PRINTLN("📋 Mevcut eşleşmiş MAC'ler:");
-  for (int i = 0; i < pairedDeviceCount; i++) {
-    DEBUG_PRINTF("  %d: %02X:%02X:%02X:%02X:%02X:%02X\n", 
-                  i, pairedMacList[i][0], pairedMacList[i][1], pairedMacList[i][2],
-                  pairedMacList[i][3], pairedMacList[i][4], pairedMacList[i][5]);
-  }
-  
   uint8_t mac[6];
-  String macString = String(macStr);
-  DEBUG_PRINTF("📝 Gelen MAC string: %s\r\n", macStr);
-  
-  // Manuel parsing - daha güvenilir
-  String macParts[6];
-  int partIndex = 0;
-  int startPos = 0;
-  
-  // ':' ile ayır
-  for (int i = 0; i <= (int)macString.length() && partIndex < 6; i++) {
-    if (i == (int)macString.length() || macString.charAt(i) == ':') {
-      if (i > startPos) {
-        macParts[partIndex] = macString.substring(startPos, i);
-        partIndex++;
-      }
-      startPos = i + 1;
-    }
-  }
-  
-  if (partIndex != 6) {
-    Serial.printf("❌ MAC formatı hatalı: %s (parts: %d)\r\n", macStr, partIndex);
-    return;
-  }
-  
-  // Her parçayı hex'e çevir
-  for (int i = 0; i < 6; i++) {
-    mac[i] = (uint8_t)strtol(macParts[i].c_str(), NULL, 16);
-  }
-         
-  DEBUG_PRINTF("🎯 Parse edilmiş MAC: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
-                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  sscanf(macStr, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+         &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]);
 
   int index = -1;
   for (int i = 0; i < pairedDeviceCount; i++) {
@@ -2022,7 +1669,6 @@ void RemovePairedMac(const char* macStr) {
   }
 
   if (index >= 0) {
-    DEBUG_PRINTF("✅ MAC bulundu, index: %d\r\n", index);
     // listedeki öğeyi kaydırarak sil
     for (int i = index; i < pairedDeviceCount - 1; i++) {
       memcpy(pairedMacList[i], pairedMacList[i + 1], 6);
@@ -2039,99 +1685,57 @@ void RemovePairedMac(const char* macStr) {
     preferences.end();
 
     // RAM'den ve esp-now'dan da çıkar
-    esp_err_t result = esp_now_del_peer(mac);
-    DEBUG_PRINTF("🗑️ ESP-NOW peer silme sonucu: %s\r\n", result == ESP_OK ? "Başarılı" : "Hata");
-    DEBUG_PRINTF("✅ MAC başarıyla silindi. Yeni sayı: %d\r\n", pairedDeviceCount);
+    esp_now_del_peer(mac);
+    Serial.println("🧹 MAC başarıyla silindi.");
   } else {
-    DEBUG_PRINTF("⚠️ MAC adresi listede bulunamadı: %s\r\n", macStr);
+    Serial.println("⚠️ MAC adresi listede bulunamadı.");
   }
 }
 
 void addToDiscoveredList(const uint8_t *mac_addr) {
-  // MAC adresini debug için yazdır
-  DEBUG_PRINT("🔍 Discovered listesine eklenmeye çalışılan MAC: ");
-  for (int i = 0; i < 6; i++) {
-    DEBUG_PRINTF("%02X", mac_addr[i]);
-    if (i < 5) DEBUG_PRINT(":");
+  for (int i = 0; i < pairedDeviceCount; i++) {
+    if (memcmp(pairedMacList[i], mac_addr, 6) == 0) return;
   }
-  Serial.println();
-  
-  // Sadece zaten discovered listesinde var mı kontrol et (paired olup olmaması önemli değil)
   for (int i = 0; i < discoveredCount; i++) {
-    if (memcmp(discoveredMacList[i], mac_addr, 6) == 0) {
-      DEBUG_PRINTLN("ℹ️ MAC zaten discovered listesinde");
-      return;
-    }
+    if (memcmp(discoveredMacList[i], mac_addr, 6) == 0) return;
   }
-  
   if (discoveredCount < MAX_PAIRED_DEVICES) {
     memcpy(discoveredMacList[discoveredCount], mac_addr, 6);
     discoveredCount++;
-    DEBUG_PRINTF("✅ Yeni cihaz discovered listesine eklendi. Toplam: %d\r\n", discoveredCount);
-  } else {
-    DEBUG_PRINTLN("⚠️ Discovered listesi dolu!");
-  }
-}
-
-void removeFromDiscoveredList(const uint8_t *mac_addr) {
-  int index = -1;
-  for (int i = 0; i < discoveredCount; i++) {
-    if (memcmp(discoveredMacList[i], mac_addr, 6) == 0) {
-      index = i;
-      break;
-    }
-  }
-  
-  if (index >= 0) {
-    // Listedeki öğeyi kaydırarak sil
-    for (int i = index; i < discoveredCount - 1; i++) {
-      memcpy(discoveredMacList[i], discoveredMacList[i + 1], 6);
-    }
-    discoveredCount--;
-    DEBUG_PRINTF("🗑️ MAC discovered listesinden çıkarıldı. Yeni toplam: %d\r\n", discoveredCount);
   }
 }
 
 void StartPairing() {
-  //DEBUG_PRINTLN("Cihaz Tarama Baslatildi...");
-  const char *scanMessage = "DEVICE_SCAN";
+  Serial.println("Eslesme Modu Baslatildi...");
+  const char *pairMessage = "PAIR_REQUEST";
 
-  // Broadcast adresine tarama mesajı gönder
-  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)scanMessage, strlen(scanMessage));
+  // Broadcast adresine mesaj gonder
+  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)pairMessage, strlen(pairMessage));
   if (result == ESP_OK) {
-    DEBUG_PRINTLN("📡 Cihaz tarama başlatıldı.");
-    // Discovered listesini temizle
-    discoveredCount = 0;
+    Serial.println("Eslesme Istegi Basariyla Gonderildi.");
   } else {
-    DEBUG_PRINTLN("⚠️ Cihaz tarama başlatılamadı.");
+    Serial.println("Eslesme Istegi Gonderilemedi.");
 #ifdef HRCMINI
-    ShowOnDisplay("TARAMA HATASI");
+    ShowOnDisplay("BAGLANTI YOK!!!");
 #endif
 #ifdef HRCNANO
-    display.message = "TARAMA HATASI";
+    display.message = "BAGLANTI YOK!!!";
 	display.scrollTextHorizontal(200);
 #endif
   }
   digitalWrite(LED_PIN, HIGH);
-  delay(1000);
+  delay(3000);
   digitalWrite(LED_PIN, LOW);
+#ifdef HRCMINI
+  display.displayClear();
+#endif
 }
 
 void SavePairedMac(const uint8_t *newMac) {
-  // MAC adresini debug için yazdır
-  DEBUG_PRINT("💾 Kaydetmeye çalışılan MAC: ");
-  for (int i = 0; i < 6; i++) {
-    DEBUG_PRINTF("%02X", newMac[i]);
-    if (i < 5) DEBUG_PRINT(":");
-  }
-  Serial.println();
-  
   preferences.begin("espnow", false);
   pairedDeviceCount = preferences.getBytesLength("paired_mac") / 6;
   if (pairedDeviceCount > MAX_PAIRED_DEVICES) pairedDeviceCount = MAX_PAIRED_DEVICES;
   preferences.getBytes("paired_mac", pairedMacList, pairedDeviceCount * 6);
-  
-  Serial.printf("📊 Mevcut eşleşmiş cihaz sayısı (kaydetmeden önce): %d\r\n", pairedDeviceCount);
 
   bool alreadyExists = false;
   for (int i = 0; i < pairedDeviceCount; i++) {
@@ -2145,28 +1749,16 @@ void SavePairedMac(const uint8_t *newMac) {
     if (pairedDeviceCount < MAX_PAIRED_DEVICES) {
       memcpy(pairedMacList[pairedDeviceCount], newMac, 6);
       pairedDeviceCount++;
-      DEBUG_PRINTF("✅ Yeni MAC eklendi. Yeni toplam: %d\r\n", pairedDeviceCount);
     } else {
       for (int i = 0; i < MAX_PAIRED_DEVICES - 1; i++) {
         memcpy(pairedMacList[i], pairedMacList[i + 1], 6);
       }
       memcpy(pairedMacList[MAX_PAIRED_DEVICES - 1], newMac, 6);
-      DEBUG_PRINTLN("🔄 Liste dolu, en eskisi silindi, yenisi eklendi");
     }
-  } else {
-    DEBUG_PRINTLN("ℹ️ MAC zaten kayıtlı");
   }
 
   preferences.putBytes("paired_mac", pairedMacList, pairedDeviceCount * 6);
   preferences.end();
-  
-  // Kaydedilen MAC'leri listele
-  DEBUG_PRINTLN("📋 Kaydedilmiş MAC listesi:");
-  for (int i = 0; i < pairedDeviceCount; i++) {
-    DEBUG_PRINTF("  %d: %02X:%02X:%02X:%02X:%02X:%02X\n", 
-                  i, pairedMacList[i][0], pairedMacList[i][1], pairedMacList[i][2],
-                  pairedMacList[i][3], pairedMacList[i][4], pairedMacList[i][5]);
-  }
 
   updatePeerStatus(newMac, true);
   esp_now_peer_info_t peerInfo = {};
@@ -2177,14 +1769,14 @@ void SavePairedMac(const uint8_t *newMac) {
     esp_now_add_peer(&peerInfo);
   }
 
-  //DEBUG_PRINTLN("✅ Eşleşmiş MAC adresi kaydedildi.");
+  Serial.println("✅ Eşleşmiş MAC adresi kaydedildi.");
 }
 
 void PrintMacAddress(const uint8_t *mac) {
-  DEBUG_PRINT("MAC Adresi: ");
+  Serial.print("MAC Adresi: ");
   for (int i = 0; i < 6; i++) {
-    DEBUG_PRINTF("%02X", mac[i]);
-    if (i < 5) DEBUG_PRINT(":");
+    Serial.printf("%02X", mac[i]);
+    if (i < 5) Serial.print(":");
   }
   Serial.println();
 }
@@ -2196,47 +1788,9 @@ String macToStr(const uint8_t *mac) {
   return String(buf);
 }
 
-void SendPairRequest(const uint8_t *mac_addr) {
-  DEBUG_PRINT("🎯 PAIR_REQUEST gönderilecek MAC: ");
-  PrintMacAddress(mac_addr);
-  Serial.println();
-  
-  // Hedef cihazın peer olarak ekli olup olmadığını kontrol et
-  if (!esp_now_is_peer_exist(mac_addr)) {
-    DEBUG_PRINTLN("⚠️ Hedef cihaz peer listesinde yok, ekleniyor...");
-    esp_now_peer_info_t peerInfo = {};
-    memcpy(peerInfo.peer_addr, mac_addr, 6);
-    peerInfo.channel = 0;
-    peerInfo.encrypt = false;
-    
-    esp_err_t addResult = esp_now_add_peer(&peerInfo);
-    if (addResult == ESP_OK) {
-      DEBUG_PRINTLN("✅ Hedef cihaz peer olarak eklendi");
-    } else {
-      DEBUG_PRINTF("❌ Peer ekleme hatası: %d\r\n", addResult);
-      return;
-    }
-  } else {
-    DEBUG_PRINTLN("ℹ️ Hedef cihaz zaten peer listesinde");
-  }
-  
-  const char *pairMessage = "PAIR_REQUEST";
-  esp_err_t result = esp_now_send(mac_addr, (uint8_t *)pairMessage, strlen(pairMessage));
-  
-  if (result == ESP_OK) {
-    DEBUG_PRINTLN("✅ PAIR_REQUEST başarıyla gönderildi");
-  } else {
-    DEBUG_PRINTF("❌ PAIR_REQUEST gönderilemedi, hata kodu: %d\r\n", result);
-  }
-  
-  digitalWrite(LED_PIN, HIGH);
-  delay(500);
-  digitalWrite(LED_PIN, LOW);
-}
-
 void AddPeer(const uint8_t *mac_addr) {
   if (esp_now_is_peer_exist(mac_addr)) {
-    //DEBUG_PRINTLN("ℹ️ Peer zaten kayıtlı.");
+    Serial.println("ℹ️ Peer zaten kayıtlı.");
     return;
   }
 
@@ -2247,31 +1801,19 @@ void AddPeer(const uint8_t *mac_addr) {
 
   esp_err_t result = esp_now_add_peer(&peerInfo);
   if (result == ESP_OK) {
-    DEBUG_PRINT("✅ Peer eklendi: ");
+    Serial.print("✅ Peer eklendi: ");
     PrintMacAddress(mac_addr);
   } else {
-    DEBUG_PRINTF("❌ Peer eklenemedi! Hata kodu: %d\n", result);
+    Serial.printf("❌ Peer eklenemedi! Hata kodu: %d\n", result);
   }
 }
 
 void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
+  addToDiscoveredList(mac_addr);  
   hata_timer = millis();
   char receivedData[len + 1];
   memcpy(receivedData, data, len);
   receivedData[len] = '\0';
-  
-  // Tüm gelen mesajları debug için yazdır
-  /*DEBUG_PRINT("📨 ESP-NOW mesaj alındı: [");
-  for (int i = 0; i < 6; i++) {
-    DEBUG_PRINTF("%02X", mac_addr[i]);
-    if (i < 5) DEBUG_PRINT(":");
-  }
-  DEBUG_PRINTF("] -> \"%s\"\n", receivedData);
-  
-  // Debug: Gelen mesajı logla
-  DEBUG_PRINTF("📥 OnDataRecv: MAC: %02X:%02X:%02X:%02X:%02X:%02X, Data: %s\n",
-                mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5],
-                receivedData);*/
   
   // Web monitörü için ESP-NOW gelen veriyi kaydet
   char macStr[18];
@@ -2279,33 +1821,10 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
           mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
   addEspnowData("From " + String(macStr) + ": " + String(receivedData), "in");
 
-  if (strcmp(receivedData, "DEVICE_SCAN") == 0) {
-    // Cihaz tarama mesajı alındı - kendini broadcast ile tanıt
-    preferences.begin("wifi", true);
-    String deviceName = preferences.getString("ssid", "HRCMINI");
-    preferences.end();
-    
-    String response = "SCAN_RESPONSE|NODE:" + deviceName + "|MODEL:" + String(MODEL) + "|VER:v1.0.0";
-    
-    // Broadcast adresine gönder (tüm cihazlar alsın)
-    esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)response.c_str(), response.length());
-    
-    if (result == ESP_OK) {
-      DEBUG_PRINTLN("📤 Tarama yanıtı broadcast gönderildi: " + deviceName);
-    } else {
-      Serial.printf("❌ Tarama yanıtı gönderilemedi: %s (error: %d)\n", deviceName.c_str(), result);
-    }
-  }
-  else if (strcmp(receivedData, "PAIR_REQUEST") == 0) {
-    //DEBUG_PRINTLN("Eslesme Istegi Alindi!");
-    
-    // SSID'yi doğru namespace'den oku
-    preferences.begin("wifi", true);
-    String deviceName = preferences.getString("ssid", "HRCMINI");
-    preferences.end();
-    
-    String response = "PAIR_RESPONSE|NODE:" + deviceName + "|MODEL:" + String(MODEL) + "|VER:v1.0.0";
-	esp_now_send(mac_addr, (uint8_t *)response.c_str(), response.length());
+  if (strcmp(receivedData, "PAIR_REQUEST") == 0) {
+    Serial.println("Eslesme Istegi Alindi!");
+    const char *response = "PAIR_RESPONSE";
+	esp_now_send(mac_addr, (uint8_t *)response, strlen(response));
   isPaired = true;
 	SavePairedMac(mac_addr);
 	AddPeer(mac_addr);
@@ -2317,20 +1836,11 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
   }
 
   else if (strcmp(receivedData, "PAIR_DEL") == 0) {
-  //DEBUG_PRINTLN("🧹 Pair silme komutu alındı!");
+  Serial.println("🧹 Pair silme komutu alındı!");
   String macStr = macToStr(mac_addr);
   RemovePairedMac(macStr.c_str());
 }
-  else if (strncmp(receivedData, "SCAN_RESPONSE", 13) == 0) {
-    Serial.println("📡 Tarama yanıtı alındı: " + String(receivedData));
-    DEBUG_PRINTF("🎯 SCAN_RESPONSE için addToDiscoveredList çağrılıyor: %02X:%02X:%02X:%02X:%02X:%02X\n",
-                  mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
-    // Sadece SCAN_RESPONSE mesajları için discovered listesine ekle
-    addToDiscoveredList(mac_addr);
-    return;
-  }
-  else if (strncmp(receivedData, "PAIR_RESPONSE", 13) == 0) {
-    Serial.println("🤝 Eşleştirme yanıtı alındı: " + String(receivedData));
+  else if (strcmp(receivedData, "PAIR_RESPONSE") == 0) {
     isPaired = true;
 	  SavePairedMac(mac_addr);
 	  PrintMacAddress(mac_addr);
@@ -2349,7 +1859,7 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
 
 #ifdef MODBUS_RTU
   else if (strcmp(receivedData, "sifir") == 0) {
-    //DEBUG_PRINTLN("SIFIR!");
+    //Serial.println("SIFIR!");
 	  //digitalWrite(15,LOW);
 	  //delay(1000);
 	  //digitalWrite(15,HIGH);
@@ -2365,157 +1875,78 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
 	  // 0x00 adresinden başla, 2 adet register yaz
 	  uint8_t result = node.writeMultipleRegisters(0x00, 2);  
 	  if (result == node.ku8MBSuccess) {
-	    DEBUG_PRINTLN("Yazma basarili!");
+	    Serial.println("Yazma basarili!");
 	  } else {
-	    DEBUG_PRINT("Yazma Hatasi, Kod = ");
-	    DEBUG_PRINTLN(result, HEX);
+	    Serial.print("Yazma Hatasi, Kod = ");
+	    Serial.println(result, HEX);
 	  }
   }
 #endif
 
   else {
-    // Normal veri mesajları için sadece eşleşmiş cihazlardan kabul et
-    bool isPairedDevice = false;
-    for (int i = 0; i < pairedDeviceCount; i++) {
-      if (memcmp(pairedMacList[i], mac_addr, 6) == 0) {
-        isPairedDevice = true;
-        break;
-      }
-    }
-    
-    if (!isPairedDevice) {
-      Serial.println("⚠️ Eşleşmemiş cihazdan veri, reddedildi: " + String(receivedData));
-      return;
-    }
-    
-    // Yeni format denemesi: NAME|MODEL|RSSI|CMD|DATA
-    EspNowMessage parsedMsg;
-    
-    if (parseEspNowMessage(receivedData, len, parsedMsg)) {
-      // Yeni format kullanılıyor
-      Serial.println("✅ ESP-NOW: " + parsedMsg.name + " (" + parsedMsg.model + ") RSSI:" + String(parsedMsg.rssi) + " -> " + parsedMsg.data);
-      
-      // Ekranda sadece DATA kısmını göster
-      String displayText = parsedMsg.data;
-      
 #ifdef HRCMINI
-      String formattedText = displayText + "(" + ") ";
+	  String formattedText = String(receivedData) + "(" + ") ";
 #else
-      String formattedText = displayText;
-#endif
-      
-#ifdef HRCMINI
-      if (formattedText != sonformattedText) {
-        ShowOnDisplay(formattedText);
-        sonformattedText = formattedText;
-      }
-#endif
-
-#if defined(HRCMESAJ) || defined(HRCMAXI)
-      String ekran_goster;
-      if (formattedText != sonformattedText) {
-        ekran_goster = formattedText + "(" + "> ";
-        sonformattedText = formattedText;
-      } else {
-        ekran_goster = formattedText + "(" + ") ";
-      }
-      // HRCMESAJ/HRCMAXI için display kodu
-      dmd.drawString(0, 0, ekran_goster.c_str(), ekran_goster.length(), GRAPHICS_NORMAL);
-#endif
-
-#ifdef HRCMESAJ_RGB
-      virtualDisp->clearScreen();
-      virtualDisp->setFont();
-      virtualDisp->setTextSize(1);
-      virtualDisp->setTextWrap(true);
-      virtualDisp->setCursor(0, 1);
-      virtualDisp->setTextColor(virtualDisp->color565(255, 100, 100));
-      virtualDisp->print("TANK 1");
-      virtualDisp->setCursor(43, 1);
-      virtualDisp->setTextColor(virtualDisp->color565(100, 255, 100));
-      virtualDisp->print(" TARTIM");
-      virtualDisp->setCursor(86, 1);
-      virtualDisp->setTextColor(virtualDisp->color565(100, 100, 255));
-      virtualDisp->print(" ONAYLANDI");
-      virtualDisp->setFont(&FreeSansBold12pt7b); 
-      virtualDisp->setTextColor(virtualDisp->color565(255,255,255));
-      virtualDisp->setCursor(0,31);
-      virtualDisp->print(formattedText);
-#endif
-
-#ifdef HRCNANO
-      String ekran_goster;
-      if (formattedText != sonformattedText) {
-        ekran_goster = formattedText + "(" + "> ";
-        sonformattedText = formattedText;
-      } else {
-        ekran_goster = formattedText + "(" + ") ";
-      }
-      display.message = ekran_goster;
-      display.BreakTextInFrames(20);
-#endif
-      
-    } else {
-      // Eski format (sadece data) - | olmayan basit string
-      Serial.println("📊 ESP-NOW Eski Format: " + String(receivedData));
-      
-#ifdef HRCMINI
-      String formattedText = String(receivedData) + "(" + ") ";
-#else
-      String formattedText = String(receivedData);
+	  String formattedText = String(receivedData);
 #endif
 #ifdef HRCMINI
-      if (formattedText != sonformattedText) {
-        if (formattedText != sonformattedText) {
-          ShowOnDisplay(formattedText);
-          sonformattedText = formattedText;
-        }
-      }
+    if (formattedText != sonformattedText) {
+	    //display.displayClear(); // Ekranı temizle
+	    if (formattedText != sonformattedText) {
+	      ShowOnDisplay(formattedText);
+	      sonformattedText = formattedText;
+	    }
+	  }
+
 #endif
 #if defined(HRCMESAJ) || defined(HRCMAXI)
-      String ekran_goster;
-      if (formattedText != sonformattedText) {
-        ekran_goster = formattedText + "(" + "> ";
-        sonformattedText = formattedText;
-      } else {
-        ekran_goster = formattedText + "(" + ") ";
-      }
-      dmd.drawString(0, 0, ekran_goster.c_str(), ekran_goster.length(), GRAPHICS_NORMAL);
+    String ekran_goster;
+	if (formattedText != sonformattedText) {
+	  ekran_goster = formattedText + "(" + "> ";
+	  sonformattedText = formattedText;
+	}
+	else {
+	  ekran_goster = formattedText + "(" + ") ";
+	}
+	dmd.drawString(0, 0, ekran_goster.c_str(), ekran_goster.length(), GRAPHICS_NORMAL);
 #endif
 #ifdef HRCMESAJ_RGB
-      virtualDisp->clearScreen();
-      virtualDisp->setFont();
-      virtualDisp->setTextSize(1);
-      virtualDisp->setTextWrap(true);
-      virtualDisp->setCursor(0, 1);
-      virtualDisp->setTextColor(virtualDisp->color565(255, 100, 100));
-      virtualDisp->print("TANK 1");
-      virtualDisp->setCursor(43, 1);
-      virtualDisp->setTextColor(virtualDisp->color565(100, 255, 100));
-      virtualDisp->print(" TARTIM");
-      virtualDisp->setCursor(86, 1);
-      virtualDisp->setTextColor(virtualDisp->color565(100, 100, 255));
-      virtualDisp->print(" ONAYLANDI");
-      virtualDisp->setFont(&FreeSansBold12pt7b); 
-      virtualDisp->setTextColor(virtualDisp->color565(255,255,255));
-      virtualDisp->setCursor(0,31);
-      virtualDisp->print(formattedText);
+  virtualDisp->clearScreen();
+  virtualDisp->setFont();
+  virtualDisp->setTextSize(1);
+  virtualDisp->setTextWrap(true);
+  virtualDisp->setCursor(0, 1);
+  virtualDisp->setTextColor(virtualDisp->color565(255, 100, 100));
+  virtualDisp->print("TANK 1");
+  virtualDisp->setCursor(43, 1);
+  virtualDisp->setTextColor(virtualDisp->color565(100, 255, 100));
+  virtualDisp->print(" TARTIM");
+  virtualDisp->setCursor(86, 1);
+  virtualDisp->setTextColor(virtualDisp->color565(100, 100, 255));
+  virtualDisp->print(" ONAYLANDI");
+  virtualDisp->setFont(&FreeSansBold12pt7b); 
+  virtualDisp->setTextColor(virtualDisp->color565(255,255,255));
+  virtualDisp->setCursor(0,31);
+  virtualDisp->print(formattedText);
 #endif
 #ifdef HRCNANO
-      String ekran_goster;
-      if (formattedText != sonformattedText) {
-        ekran_goster = formattedText + "(" + "> ";
-        sonformattedText = formattedText;
-      } else {
-        ekran_goster = formattedText + "(" + ") ";
-      }
-      display.message = ekran_goster;
-      display.BreakTextInFrames(20);
+    String ekran_goster;
+	if (formattedText != sonformattedText) {
+	  ekran_goster = formattedText + "(" + "> ";
+	  sonformattedText = formattedText;
+	}
+	else {
+	  ekran_goster = formattedText + "(" + ") ";
+	}
+	display.message = ekran_goster; // Sabit pozisyon belirle
+	display.BreakTextInFrames(20);
 #endif
-    }
-    // Gelen veriyi sabit olarak LED ekrana yazdır
-    // display.displayText(receivedData.c_str(), PA_CENTER, 0, 0, PA_NO_EFFECT, PA_NO_EFFECT); // Sabit pozisyon belirle
-    hata = false;
+	// Gelen veriyi seri monitora yazdır
+	Serial.print("Gelen veri: ");
+	Serial.println(receivedData);
+	// Gelen veriyi sabit olarak LED ekrana yazdır
+	// display.displayText(receivedData.c_str(), PA_CENTER, 0, 0, PA_NO_EFFECT, PA_NO_EFFECT); // Sabit pozisyon belirle
+	hata = false;
     digitalWrite(LED_PIN, HIGH);
   }
 }
@@ -2532,22 +1963,8 @@ void SendData(String data) {
     String macStr = macToStr(pairedMacList[i]);
     addEspnowData("To " + macStr + ": " + data, "out");
     
-    // Yeni format: NAME|MODEL|RSSI|CMD|DATA
-    int rssi = WiFi.RSSI(); // WiFi RSSI al
-    if (rssi == 0) rssi = lastReceivedRSSI; // ESP-NOW modunda last received RSSI kullan
-    
-    // SSID'yi doğru namespace'den oku
-    preferences.begin("wifi", true);
-    String deviceName = preferences.getString("ssid", "HRCMINI"); // SSID'yi NAME olarak kullan
-    preferences.end();
-    
-    //DEBUG_PRINTLN("🔍 Debug - SSID: " + deviceName); // Debug için
-    String formattedData = deviceName + "|" + MODEL + "|" + String(rssi) + "|CMD|" + data;
-    
-    esp_err_t result = esp_now_send(pairedMacList[i], (uint8_t *)formattedData.c_str(), formattedData.length());
+    esp_err_t result = esp_now_send(pairedMacList[i], (uint8_t *)data.c_str(), data.length());
     updatePeerStatus(pairedMacList[i], result == ESP_OK);
-    
-    DEBUG_PRINTLN("📤 ESP-NOW Sent: " + formattedData);
   }
 }
 #endif
@@ -2562,9 +1979,7 @@ void startWebServer() {
         password = request->getParam("password", true)->value();
       }
       SaveSSID(newSSID);
-      if (password.length() > 0) {
-        SavePassword(password);
-      }
+      // TODO: Şifre kaydetme işlemi eklenecek
       request->send(200, "text/plain", "Wi-Fi ayarları kaydedildi");
       ESP.restart();
     } else {
@@ -2584,10 +1999,10 @@ void startWebServer() {
         #endif
         
         // Parlaklığı preferences'a kaydet
-        preferences.begin("settings", false);
-        preferences.putInt("brightness", brightness);
-        preferences.end();
-        DEBUG_PRINTF("💾 Parlaklık kaydedildi: %d%%\n", brightness);
+        Preferences prefs;
+        prefs.begin("display", false);
+        prefs.putInt("brightness", brightness);
+        prefs.end();
         
         request->send(200, "text/plain", "Parlaklık ayarlandı");
       } else {
@@ -2596,46 +2011,6 @@ void startWebServer() {
     } else {
       request->send(400, "text/plain", "Parlaklık parametresi eksik");
     }
-  });
-
-  // Parlaklık okuma endpoint'i
-  server.on("/get_brightness", HTTP_GET, [](AsyncWebServerRequest *request){
-    preferences.begin("settings", true);
-    int savedBrightness = preferences.getInt("brightness", 50); // Varsayılan %50
-    preferences.end();
-    DEBUG_PRINTF("📖 Parlaklık okundu: %d%%\n", savedBrightness);
-    request->send(200, "text/plain", String(savedBrightness));
-  });
-
-  // SSID okuma endpoint'i
-  server.on("/get_ssid", HTTP_GET, [](AsyncWebServerRequest *request){
-    preferences.begin("wifi", true);
-    String savedSSID = preferences.getString("ssid", "HRC_DEFAULT");
-    preferences.end();
-    DEBUG_PRINTF("📖 SSID okundu: '%s'\n", savedSSID.c_str());
-    request->send(200, "text/plain", savedSSID);
-  });
-
-  // Debug ayarları endpoint'leri
-  server.on("/set_debug", HTTP_POST, [](AsyncWebServerRequest *request){
-    if (request->hasParam("enabled", true)) {
-      String enabledStr = request->getParam("enabled", true)->value();
-      debugEnabled = (enabledStr == "true");
-      
-      // Debug durumunu preferences'a kaydet
-      preferences.begin("settings", false);
-      preferences.putBool("debug", debugEnabled);
-      preferences.end();
-      
-      DEBUG_PRINTF("🐛 Debug %s\n", debugEnabled ? "açıldı" : "kapatıldı");
-      request->send(200, "text/plain", debugEnabled ? "Debug açık" : "Debug kapalı");
-    } else {
-      request->send(400, "text/plain", "Enabled parametresi eksik");
-    }
-  });
-
-  server.on("/get_debug", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send(200, "text/plain", debugEnabled ? "true" : "false");
   });
 
   // Serial veri logları endpoint
@@ -2775,8 +2150,6 @@ void startWebServer() {
 
   #ifdef ESPNOW
   server.on("/mac_list", HTTP_GET, [](AsyncWebServerRequest *request){
-    //DEBUG_PRINTF("🌐 /mac_list çağrıldı. Paired: %d, Discovered: %d\n", pairedDeviceCount, discoveredCount);
-    
     DynamicJsonDocument doc(2048);
 
     // ✅ Güncel eşleşen cihazlar
@@ -2820,7 +2193,6 @@ void startWebServer() {
   server.on("/add_mac", HTTP_POST, [](AsyncWebServerRequest *request){
     if (request->hasParam("mac", true)) {
       String macStr = request->getParam("mac", true)->value();
-      macStr.toUpperCase(); // Büyük harfe çevir
       uint8_t mac[6];
       sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
              &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]);
@@ -2832,70 +2204,34 @@ void startWebServer() {
   server.on("/delete_mac", HTTP_POST, [](AsyncWebServerRequest *request){
     if (request->hasParam("mac", true)) {
       String macStr = request->getParam("mac", true)->value();
-      DEBUG_PRINTLN("🗑️ MAC silme isteği: " + macStr);
       RemovePairedMac(macStr.c_str());
-      request->send(200, "text/plain", "MAC silindi: " + macStr);
-    } else {
-      DEBUG_PRINTLN("❌ MAC parametresi eksik");
-      request->send(400, "text/plain", "MAC parametresi eksik");
     }
+    request->send(200);
   });
 
   server.on("/pair_request", HTTP_POST, [](AsyncWebServerRequest *request){
-    DEBUG_PRINTLN("🌐 /pair_request endpoint çağrıldı");
-    
     if (!request->hasParam("mac", true)) {
-      DEBUG_PRINTLN("❌ MAC parametresi eksik");
       request->send(400, "text/plain", "MAC eksik");
       return;
     }
 
     String macStr = request->getParam("mac", true)->value();
-    DEBUG_PRINTLN("🎯 Eşleştirme isteği MAC: " + macStr);
-    
     uint8_t mac[6];
-    // Manuel parsing - daha güvenilir
-    String macParts[6];
-    int partIndex = 0;
-    int startPos = 0;
-    
-    // ':' ile ayır
-    for (int i = 0; i <= (int)macStr.length() && partIndex < 6; i++) {
-      if (i == (int)macStr.length() || macStr.charAt(i) == ':') {
-        if (i > startPos) {
-          macParts[partIndex] = macStr.substring(startPos, i);
-          partIndex++;
-        }
-        startPos = i + 1;
-      }
-    }
-    
-    if (partIndex != 6) {
-      Serial.printf("❌ MAC formatı hatalı: %s (parts: %d)\n", macStr.c_str(), partIndex);
+    if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+             &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) != 6) {
       request->send(400, "text/plain", "MAC formatı hatalı");
       return;
     }
-    
-    // Her parçayı hex'e çevir
-    for (int i = 0; i < 6; i++) {
-      mac[i] = (uint8_t)strtol(macParts[i].c_str(), NULL, 16);
-    }
-    
-    DEBUG_PRINTF("✅ MAC başarıyla parse edildi: %02X:%02X:%02X:%02X:%02X:%02X\n",
-                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-    DEBUG_PRINTLN("📤 SendPairRequest çağrılıyor...");
-    // PAIR_REQUEST gönder
-    SendPairRequest(mac);
-    
-    // MAC adresini eşleşmiş cihazlar listesine ekle
-    SavePairedMac(mac);
-    
-    // Discovered listesinden çıkar (artık eşleşmiş)
-    removeFromDiscoveredList(mac);
-    
-    Serial.printf("🤝 Eşleştirme işlemi başlatıldı: %s\n", macStr.c_str());
-    request->send(200, "text/plain", "Eşleştirme isteği gönderildi ve kaydedildi");
+    const char* msg = "PAIR_REQUEST";
+    esp_err_t result = esp_now_send(mac, (uint8_t*)msg, strlen(msg));
+    if (result == ESP_OK) {
+      Serial.printf("📤 PAIR_REQUEST gönderildi: %s\n", macStr.c_str());
+      request->send(200, "text/plain", "Gönderildi");
+    } else {
+      Serial.printf("❌ Gönderim hatası: %s\n", macStr.c_str());
+      request->send(500, "text/plain", "Gönderilemedi");
+    }
   });
   #endif
   
@@ -2940,7 +2276,7 @@ void startWebServer() {
     }
   });
   server.begin();
-  //DEBUG_PRINTLN("Web sunucusu baslatıldı.");
+  Serial.println("Web sunucusu baslatıldı.");
 }
 
 // WiFi ve Web sunucusunu farklı bir task'ta calıstırma
@@ -2962,9 +2298,6 @@ const uint8_t *data_son;
 //#if defined(HRCMINI) || defined(SERITOUSB)
 //#endif
 void FormatNumericData(String &numericData, char *output) {
-    // Boşlukları temizle
-    numericData.trim();
-    
     // Noktanın yerini ve verinin uzunlugunu hesapla
     int dotIndex = numericData.indexOf('.');
     int length = numericData.length();
@@ -2985,13 +2318,12 @@ void FormatNumericData(String &numericData, char *output) {
             snprintf(output, 7, "%6.1f", value);
         } else if (decimalPlaces == 2) {
             snprintf(output, 7, "%6.2f", value);
-		    } else if (decimalPlaces == 3) {
-			  // numericData string uzunluğunu kontrol et
-			    if ((value > 99.999) || (value < -99.999)) { // 6. karakter varsa (5'ten büyükse)
+		} else if (decimalPlaces == 3) {
+			if (value > 99.999) {
               snprintf(output, 9, "%7.3f ", value);
-			    }
-			    else
-            snprintf(output, 7, "%6.3f", value);
+			}
+			else
+              snprintf(output, 7, "%6.3f", value);
         } else if (decimalPlaces == 4) {
             snprintf(output, 7, "%6.4f", value);
 		}
@@ -3012,52 +2344,10 @@ String ExtractNumericData(String data) {
 	return numericData;
 }
 
-// Serial port veri işleme fonksiyonu (optimize edilmiş)
-void processSerialData(Stream& serialPort, const String& portName, bool enableESPNOW = true) {
-  if (!serialPort.available()) return;
-  
-  char output[9]; // 6 karakter + null terminator için
-  String data = serialPort.readStringUntil('\n');
-  
-  // Web monitörü için veriyi kaydet
-  if (data.length() > 0) {
-    addSerialData(portName + ": " + data.substring(0, min((int)data.length(), 50)));
-  }
-  
-  String numericData = ExtractNumericData(data);
-  FormatNumericData(numericData, output);
-  
-  // Minimum veri uzunluğu kontrolü
-  if (data.length() > 5) {
-    hata_timer = millis(); // HATA timer'ını sıfırla
-    
-    #ifdef ESPNOW
-    if (enableESPNOW) {
-      SendData(output);
-    }
-    #endif
-    
-    //Serial.println("Terazi Datası : " + data + " Ekran Datası : " + String(output));
-    addSerialData("Processed: " + String(output));
-    
-    #ifdef HRCMINI
-    String formattedText = numericData + "(" + ")";
-    if (formattedText != sonformattedText) {
-      ShowOnDisplay(formattedText);
-      sonformattedText = formattedText;
-    }
-    #endif
-    
-    hata = false;
-  }
-  
-  serialPort.flush();
-}
-
 #ifdef HRCMESAJ
 void processModbusData() {
-  //DEBUG_PRINT("Gelen Veri: ");
-  DEBUG_PRINTLN(receivedData); // Gelen veriyi ASCII olarak yazdır
+  //Serial.print("Gelen Veri: ");
+  Serial.println(receivedData); // Gelen veriyi ASCII olarak yazdır
 
   // Tartım verisini ayıkla
   if (receivedData[0] == ':' && strlen(receivedData) >= 13) {
@@ -3067,11 +2357,11 @@ void processModbusData() {
     //Serial.print("Tartım Bilgisi (Decimal): ");
 	char formattedTartim[10]; // Formatlanmıs veri icin buffer
 	snprintf(formattedTartim, sizeof(formattedTartim), "%6d()  ", tartimDecimal);
-	DEBUG_PRINTLN(formattedTartim);
+	Serial.println(formattedTartim);
 	// Formatlanmıs veriyi ekrana yazdır
 	dmd.drawString(0, 0, formattedTartim, (strlen(formattedTartim)+2), GRAPHICS_NORMAL);
   } else {
-    DEBUG_PRINTLN("Gecersiz Veri");
+    Serial.println("Gecersiz Veri");
   }
 }
 #endif
@@ -3227,7 +2517,7 @@ void setup(void) {
   display.turnOn();
   display.message = "HRCNANO "; // Sabit pozisyon belirle
   display.BreakTextInFrames(2000);
-  display.message = "  BILTER"; // Sabit pozisyon belirle
+  display.message = " ENDUTEK"; // Sabit pozisyon belirle
   display.BreakTextInFrames(2000);
   display.clear_buffer();
 #endif
@@ -3323,19 +2613,18 @@ Serial1.begin(115200, SERIAL_8N1, 17, 16);
   Serial1.begin(9600, SERIAL_8N1, 17, 16); // Harici cihaz için Serial1
   display.begin();
   
-  // Kaydedilmiş ayarları yükle
-  preferences.begin("settings", false);
-  int savedBrightness = preferences.getInt("brightness", 50); // Varsayılan %50
-  debugEnabled = preferences.getBool("debug", true); // Varsayılan açık
-  preferences.end(); // ÖNEMLİ: Preferences'ı kapat
+  // Kaydedilmiş parlaklık ayarını yükle
+  Preferences prefs;
+  prefs.begin("display", true);
+  int savedBrightness = prefs.getInt("brightness", 50); // Varsayılan %50
+  prefs.end();
   
   uint8_t intensity = map(savedBrightness, 0, 100, 0, 15);
   display.setIntensity(intensity); // Parlaklık ayarı (0 - 15 arası)
   display.displayClear();  // Ekranı temizleme
   display.setFont(dotmatrix_5x8);
   
-  DEBUG_PRINTF("🐛 Debug sistemi %s\n", debugEnabled ? "AÇIK" : "KAPALI");
-  DEBUG_PRINTF("✅ Parlaklık yüklendi: %d%% (intensity: %d)\n", savedBrightness, intensity);
+  Serial.printf("Parlaklık yüklendi: %d%% (intensity: %d)\n", savedBrightness, intensity);
   
   startupMessageTimer = millis();
 #endif
@@ -3348,7 +2637,7 @@ Serial1.begin(115200, SERIAL_8N1, 17, 16);
   startWebServer();
   // ESP-NOW baslat
   if (esp_now_init() != ESP_OK) {
-    DEBUG_PRINTLN("ESP-NOW Baslatilamadi!");
+    Serial.println("ESP-NOW Baslatilamadi!");
 #ifdef HRCMINI
 #endif
 #ifdef HRCNANO
@@ -3357,19 +2646,14 @@ Serial1.begin(115200, SERIAL_8N1, 17, 16);
 #endif
     return;
   } else {
-    //DEBUG_PRINTLN("ESP-NOW Baslatildi!");
-    
-    // TX Power ayarla - maksimum güç (20 dBm = 100mW)
-    WiFi.setTxPower(WIFI_POWER_19_5dBm); // Maksimum güç
-    //DEBUG_PRINTLN("📡 ESP-NOW TX Power ayarlandi: 19.5 dBm");
-    
+    Serial.println("ESP-NOW Baslatildi!");
     // Startup sequence loop'ta başlatılacak
   }
   // Daha once eslesmis cihaz var mı kontrol et
   LoadPairedMac();
 
 if (!isPaired && !preferences.getBytesLength("paired_mac")) {
-    DEBUG_PRINTLN("Eslesmis Cihaz Yok. Eslesme Bekleniyor.");
+    Serial.println("Eslesmis Cihaz Yok. Eslesme Bekleniyor.");
 #ifdef HRCMINI
     ShowOnDisplay("ESLESME YOK..");
 #endif
@@ -3379,7 +2663,7 @@ if (!isPaired && !preferences.getBytesLength("paired_mac")) {
 #endif
     Serial1_mod = true; 
 } else {
-    //DEBUG_PRINTLN("Eslesmis cihaz bulundu:");
+    Serial.println("Eslesmis cihaz bulundu:");
     PrintMacAddress(pairedMacList[0]);
     
     // 'i' degiskenini 0 olarak baslat ve kayıtlı cihaz sayısına gore dongu yap
@@ -3387,9 +2671,9 @@ if (!isPaired && !preferences.getBytesLength("paired_mac")) {
     for (int i = 0; i < pairedDeviceCount && i < maxDeviceCount; i++) {
         if (pairedMacList[i] != nullptr) { // Gecerli MAC adresi kontrolu
             //AddPeer(pairedMacList[i]); // Eslesmis cihazı peer olarak ekle
-            DEBUG_PRINTF("Peer eklendi: Cihaz %d\n", i);
+            Serial.printf("Peer eklendi: Cihaz %d\n", i);
         } else {
-            DEBUG_PRINTF("Gecersiz MAC adresi: Cihaz %d\n", i);
+            Serial.printf("Gecersiz MAC adresi: Cihaz %d\n", i);
         }
     }
 #ifdef HRCNANO
@@ -3409,18 +2693,18 @@ if (!isPaired && !preferences.getBytesLength("paired_mac")) {
   peerInfo.encrypt = false;
 
   if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-    //DEBUG_PRINTLN("Peer Eklenemedi!");
+    Serial.println("Peer Eklenemedi!");
 #ifdef HRCMINI
     ShowOnDisplay("PEER ERR");
 #endif
   } else {
-    DEBUG_PRINTLN("Peer Basariyla Eklendi.");
+    Serial.println("Peer Basariyla Eklendi.");
   }
 #endif
 #ifdef HRCMINI
 ShowOnDisplay("HRCMINI");
 delay(2000);
-ShowOnDisplay(" BILTER");
+ShowOnDisplay("ENDUTEK");
 delay(3000);
 
 // Startup tamamlandı
@@ -3485,7 +2769,7 @@ while (Serial2.available()) {
     snprintf(terazi_data_c, sizeof(terazi_data_c), "%8.1f", terazi_data);
     String stabil_data = "ST,GS,+";
     Serial.println(stabil_data + String(terazi_data_c) + String(F(" g   "))); // String(terazi_data_c)  //ST,GS,+  236.6 g   CRLF
-	//DEBUG_PRINT(inByte);
+	//Serial.print(inByte);
 	Serial2.flush();
 }
       
@@ -3508,7 +2792,7 @@ while (Serial2.available()) {
   };
   // Modbus sorgusunu gonder
    modbusSerial.write(modbusRequest, sizeof(modbusRequest));
-  //modbusDEBUG_PRINT(":010300000001FB\r\n");
+  //modbusSerial.print(":010300000001FB\r\n");
   while (modbusSerial.available()) {
 	startMillis = millis() + 5000;
     char incomingChar = modbusSerial.read(); // Gelen karakteri oku
@@ -3583,14 +2867,100 @@ if (Serial.available()) {
 #endif
 
 #if defined(HRCMINI) || defined(HRCNANO)
-  // Optimize edilmiş serial port işleme
-  #ifdef ESPNOW
-  processSerialData(Serial, "Serial", isPaired); // Serial ESP-NOW ile çalışsın sadece eşleşmişse
-  #else
-  processSerialData(Serial, "Serial", false); // ESP-NOW devre dışı
-  #endif
+ if (Serial.available()) {
+	char output[9]; // 6 karakter + null terminator icin
+    String data = Serial.readStringUntil('\n');
+	//String data = Serial.readStringUntil('\r');
+    
+    // Web monitörü için veriyi kaydet
+    if (data.length() > 0) {
+      addSerialData("Serial: " + data.substring(0, min((int)data.length(), 50))); // İlk 50 karakter
+    }
+    
+    String numericData = ExtractNumericData(data); // Sayısal kısmı ayıkla
+	FormatNumericData(numericData, output); // Formatla
+    if (String(output).length() > 0) {
+      hata_timer = millis();
+#ifdef ESPNOW
+      if (isPaired) {
+        SendData(output);
+      }
+#endif
+    }
+    Serial.flush();
+  }
+
+  if (Serial1.available()) {
+	char output[9]; // 6 karakter + null terminator icin
+    String data = Serial1.readStringUntil('\n');
+    
+    // Web monitörü için veriyi kaydet
+    if (data.length() > 0) {
+      addSerialData("Serial1: " + data.substring(0, min((int)data.length(), 50))); // İlk 50 karakter
+    }
+    
+    //String numericData = ExtractNumericData(data.substring(10,18)); // Sayısal kısmı ayıkla
+    String numericData = ExtractNumericData(data);
+	FormatNumericData(numericData, output); // Formatla
+	//if (data.length() == 17) {
+	//if (data.length() == 16) {
+	if (data.length() > 5) {
+      hata_timer = millis();
+#ifdef ESPNOW
+        SendData(output);
+#endif
+	  Serial.println("Terazi Datası : " + data + " Ekran Datası : " + String(output));
+      
+      // Formatlanmış veriyi de monitöre ekle
+      addSerialData("Processed: " + String(output));
+      
+	  Serial1.flush();
+    }
+    //if (Serial1_mod) {
+    #ifdef HRCMINI
+	  String formattedText = numericData + "(" + ")";
+      if (formattedText != sonformattedText) {
+	    ShowOnDisplay(formattedText);
+	    sonformattedText = formattedText;
+	  }
+    #endif
+    //}
+    Serial1.flush();
+  }
   
-  processSerialData(Serial1, "Serial1", true); // Serial1 her zaman ESP-NOW ile çalışsın
+  else if (!isPaired && Serial1.available()) {
+      char output[9]; // 6 karakter + null terminator icin
+      String data = Serial1.readStringUntil('\n');
+      
+      // Web monitörü için veriyi kaydet
+      if (data.length() > 0) {
+        addSerialData("Raw: " + data.substring(0, min((int)data.length(), 50))); // İlk 50 karakter
+      }
+      
+      String numericData = ExtractNumericData(data); // Sayısal kısmı ayıkla
+	  FormatNumericData(numericData, output); // Formatla
+	  //Serial.println(data.length());
+      //if (data.length() == 17) { //seles
+	  //if (data.length() == 16) {
+	  if (data.length() > 5) {
+        hata_timer = millis();
+	    Serial.println("Terazi Datası : " + data + " Ekran Datası : " + String(output));
+        
+        // Formatlanmış veriyi de monitöre ekle
+        addSerialData("Processed: " + String(output));
+        //if (Serial1_mod) {
+	      String formattedText = String(output) + "(" + ")";
+      #ifdef HRCMINI
+          if (formattedText != sonformattedText) {
+	        ShowOnDisplay(formattedText);
+	        sonformattedText = formattedText;
+	      }
+      #endif
+      //}
+    }
+	  hata = false;
+    Serial1.flush();
+   }
 
   if (((millis() - hata_timer) > 8000) && (!hata)) {
     // 8 saniye veri gelmezse HATA göster
@@ -3616,14 +2986,14 @@ if (result == node.ku8MBSuccess) {
 	uint32_t combined = ((uint32_t)val1 << 16) | val2;
 	signedValue = (long)combined;
 
-    DEBUG_PRINT("Register[0x10] = ");
-    DEBUG_PRINT(val1);
-    DEBUG_PRINT("   Register[0x11] = ");
-    DEBUG_PRINTLN(val2);
+    Serial.print("Register[0x10] = ");
+    Serial.print(val1);
+    Serial.print("   Register[0x11] = ");
+    Serial.println(val2);
   } else {
     // Hata kodu
-    DEBUG_PRINT("Modbus read error, code: ");
-    DEBUG_PRINTLN(result, HEX);
+    Serial.print("Modbus read error, code: ");
+    Serial.println(result, HEX);
   }
 
 /*if (!mb.slave()) {
@@ -3637,7 +3007,7 @@ if (result == node.ku8MBSuccess) {
   long signedValue = (long)combined;
 
   Serial.print("Long (invert): ");
-  DEBUG_PRINTLN(signedValue);*/
+  Serial.println(signedValue);*/
 
 #ifdef ESPNOW
   SendData(String(signedValue));
@@ -3656,5 +3026,6 @@ if (result == node.ku8MBSuccess) {
     digitalWrite(LED_PIN, LOW);
   }
 #endif
+
 
 }
