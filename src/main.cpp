@@ -2234,6 +2234,85 @@ void SendPairRequest(const uint8_t *mac_addr) {
   digitalWrite(LED_PIN, LOW);
 }
 
+// Otomatik eşleştirme (buton ile)
+void StartAutoPairing() {
+  DEBUG_PRINTLN("🤖 Otomatik eşleştirme başlatıldı");
+  
+#ifdef HRCMINI
+  ShowOnDisplay("ESLESME...");
+#endif
+
+  // Önce keşfedilen listeyi temizle
+  discoveredCount = 0;
+  
+  // Cihaz taraması başlat
+  const char *scanMessage = "DEVICE_SCAN";
+  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)scanMessage, strlen(scanMessage));
+  
+  if (result == ESP_OK) {
+    DEBUG_PRINTLN("📡 Otomatik tarama başlatıldı");
+    
+    // LED yanıp sönsün (tarama göstergesi)
+    for (int i = 0; i < 3; i++) {
+      digitalWrite(LED_PIN, HIGH);
+      delay(200);
+      digitalWrite(LED_PIN, LOW);
+      delay(200);
+    }
+    
+    // 3 saniye bekle (cihazların yanıt vermesi için)
+    delay(3000);
+    
+    // İlk bulunan cihazla eşleştirme yap
+    if (discoveredCount > 0) {
+      DEBUG_PRINTF("✅ %d cihaz bulundu, ilki ile eşleştiriliyor\n", discoveredCount);
+      
+      // İlk cihazın MAC adresini al
+      uint8_t targetMAC[6];
+      memcpy(targetMAC, discoveredMacList[0], 6);
+      
+      // Eşleştirme isteği gönder
+      SendPairRequest(targetMAC);
+      
+      // MAC adresini kaydet
+      SavePairedMac(targetMAC);
+      
+#ifdef HRCMINI
+      ShowOnDisplay("ESLESTI!");
+#endif
+      
+      // Başarı LED'i
+      for (int i = 0; i < 5; i++) {
+        digitalWrite(LED_PIN, HIGH);
+        delay(100);
+        digitalWrite(LED_PIN, LOW);
+        delay(100);
+      }
+      
+    } else {
+      DEBUG_PRINTLN("❌ Hiç cihaz bulunamadı");
+      
+#ifdef HRCMINI
+      ShowOnDisplay("CIHAZ YOK");
+#endif
+      
+      // Hata LED'i
+      for (int i = 0; i < 3; i++) {
+        digitalWrite(LED_PIN, HIGH);
+        delay(500);
+        digitalWrite(LED_PIN, LOW);
+        delay(500);
+      }
+    }
+  } else {
+    DEBUG_PRINTLN("❌ Otomatik tarama başlatılamadı");
+    
+#ifdef HRCMINI
+    ShowOnDisplay("HATA");
+#endif
+  }
+}
+
 void AddPeer(const uint8_t *mac_addr) {
   if (esp_now_is_peer_exist(mac_addr)) {
     //DEBUG_PRINTLN("ℹ️ Peer zaten kayıtlı.");
@@ -3323,6 +3402,9 @@ Serial1.begin(115200, SERIAL_8N1, 17, 16);
   Serial1.begin(9600, SERIAL_8N1, 17, 16); // Harici cihaz için Serial1
   display.begin();
   
+  // Buton pinini ayarla
+  pinMode(PAIR_BUTTON, INPUT_PULLUP);
+  
   // Kaydedilmiş ayarları yükle
   preferences.begin("settings", false);
   int savedBrightness = preferences.getInt("brightness", 50); // Varsayılan %50
@@ -3574,7 +3656,7 @@ if (Serial.available()) {
       buttonPressStartTime = millis(); // Basılma baslangıc zamanını kaydet
       buttonPressed = true;
     } else if (millis() - buttonPressStartTime >= 3000) { // 3 saniye gecti mi?
-      StartPairing(); // 3 saniye boyunca basılı tutulduysa eslesme baslat
+      StartAutoPairing(); // 3 saniye boyunca basılı tutulduysa otomatik eslesme baslat
       buttonPressed = false; // İslem tamam, tekrar tetiklenmesini engelle
     }
   } else { // Buton bırakıldıgında
@@ -3656,5 +3738,7 @@ if (result == node.ku8MBSuccess) {
     digitalWrite(LED_PIN, LOW);
   }
 #endif
+
+
 
 }
