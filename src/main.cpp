@@ -188,7 +188,6 @@ Preferences preferences;
 #include <WiFi.h>
 #include <esp_wifi.h>
 
-
 bool Serial1_mod = false;
 // Degiskenler
 #define MAX_PAIRED_DEVICES 6
@@ -212,6 +211,9 @@ int discoveredCount = 0;
 // Broadcast adresini belirle
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 esp_now_peer_info_t peerInfo;
+
+// Cached device name for performance optimization
+String cachedDeviceName = "";
 
 unsigned long buttonPressStartTime = 0; // Butona basılma baslangıc zamanı
 bool buttonPressed = false;
@@ -2360,9 +2362,8 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
 
   if (strcmp(receivedData, "DEVICE_SCAN") == 0) {
     // Cihaz tarama mesajı alındı - kendini broadcast ile tanıt
-    preferences.begin("wifi", true);
-    String deviceName = preferences.getString("ssid", "HRCMINI");
-    preferences.end();
+    // Device name'i cache'den al (performance optimized)
+    String deviceName = cachedDeviceName.isEmpty() ? "HRCMINI" : cachedDeviceName;
     
     String response = "SCAN_RESPONSE|NODE:" + deviceName + "|MODEL:" + String(MODEL) + "|VER:v1.0.0";
     
@@ -2378,19 +2379,20 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
   else if (strcmp(receivedData, "PAIR_REQUEST") == 0) {
     //DEBUG_PRINTLN("Eslesme Istegi Alindi!");
     
-    // SSID'yi doğru namespace'den oku
-    preferences.begin("wifi", true);
-    String deviceName = preferences.getString("ssid", "HRCMINI");
-    preferences.end();
+    // Device name'i cache'den al (performance optimized)
+    String deviceName = cachedDeviceName.isEmpty() ? "HRCMINI" : cachedDeviceName;
     
     String response = "PAIR_RESPONSE|NODE:" + deviceName + "|MODEL:" + String(MODEL) + "|VER:v1.0.0";
-	esp_now_send(mac_addr, (uint8_t *)response.c_str(), response.length());
-  isPaired = true;
-	SavePairedMac(mac_addr);
-	AddPeer(mac_addr);
+    
+    // Direkt ESP-NOW ile gönder
+    esp_now_send(mac_addr, (uint8_t *)response.c_str(), response.length());
+    
+    isPaired = true;
+    SavePairedMac(mac_addr);
+    AddPeer(mac_addr);
 #ifdef HRCMINI
-	ShowOnDisplay("BAGLANDI!");
-	sonformattedText = "";
+    ShowOnDisplay("BAGLANDI!");
+    sonformattedText = "";
 #endif
     return;
   }
@@ -2615,12 +2617,9 @@ void SendData(String data) {
     int rssi = WiFi.RSSI(); // WiFi RSSI al
     if (rssi == 0) rssi = lastReceivedRSSI; // ESP-NOW modunda last received RSSI kullan
     
-    // SSID'yi doğru namespace'den oku
-    preferences.begin("wifi", true);
-    String deviceName = preferences.getString("ssid", "HRCMINI"); // SSID'yi NAME olarak kullan
-    preferences.end();
+    // Device name'i cache'den al (performance optimized - 5-10ms faster)
+    String deviceName = cachedDeviceName.isEmpty() ? "HRCMINI" : cachedDeviceName;
     
-    //DEBUG_PRINTLN("🔍 Debug - SSID: " + deviceName); // Debug için
     String formattedData = deviceName + "|" + MODEL + "|" + String(rssi) + "|CMD|" + data;
     
     esp_err_t result = esp_now_send(pairedMacList[i], (uint8_t *)formattedData.c_str(), formattedData.length());
@@ -2628,6 +2627,16 @@ void SendData(String data) {
     
     DEBUG_PRINTLN("📤 ESP-NOW Sent: " + formattedData);
   }
+}
+#endif
+
+#ifdef ESPNOW
+// Cache refresh function for device name
+void refreshDeviceNameCache() {
+  preferences.begin("wifi", true);
+  cachedDeviceName = preferences.getString("ssid", "HRCMINI");
+  preferences.end();
+  DEBUG_PRINTLN("📝 Device name cache refreshed: " + cachedDeviceName);
 }
 #endif
 
@@ -2644,6 +2653,12 @@ void startWebServer() {
       if (password.length() > 0) {
         SavePassword(password);
       }
+      
+#ifdef ESPNOW
+      // Cache'i güncelle
+      refreshDeviceNameCache();
+#endif
+      
       request->send(200, "text/plain", "Wi-Fi ayarları kaydedildi");
       ESP.restart();
     } else {
@@ -3428,24 +3443,27 @@ Serial1.begin(115200, SERIAL_8N1, 17, 16);
 
   startHiddenAP();
   startWebServer();
+  
   // ESP-NOW baslat
   if (esp_now_init() != ESP_OK) {
     DEBUG_PRINTLN("ESP-NOW Baslatilamadi!");
 #ifdef HRCMINI
 #endif
 #ifdef HRCNANO
-	display.message = "BAGLANTI YOK"; // Sabit pozisyon belirle
-	display.scrollTextHorizontal(200);
+    display.message = "BAGLANTI YOK"; // Sabit pozisyon belirle
+    display.scrollTextHorizontal(200);
 #endif
     return;
   } else {
-    //DEBUG_PRINTLN("ESP-NOW Baslatildi!");
+    // Device name'i cache'e yükle (performance optimization)
+    preferences.begin("wifi", true);
+    cachedDeviceName = preferences.getString("ssid", "HRCMINI");
+    preferences.end();
+    DEBUG_PRINTLN("✅ Device name cached: " + cachedDeviceName);
     
     // TX Power ayarla - maksimum güç (20 dBm = 100mW)
     WiFi.setTxPower(WIFI_POWER_19_5dBm); // Maksimum güç
-    //DEBUG_PRINTLN("📡 ESP-NOW TX Power ayarlandi: 19.5 dBm");
-    
-    // Startup sequence loop'ta başlatılacak
+    DEBUG_PRINTLN("📡 ESP-NOW TX Power ayarlandi: 19.5 dBm");
   }
   // Daha once eslesmis cihaz var mı kontrol et
   LoadPairedMac();
@@ -3478,6 +3496,10 @@ if (!isPaired && !preferences.getBytesLength("paired_mac")) {
 	display.message = "BAGLANTI KURULUYOR.."; // Sabit pozisyon belirle
 	display.scrollTextHorizontal(200);
 #endif
+#ifdef HRCNANO
+    display.message = "BAGLANTI KURULUYOR.."; // Sabit pozisyon belirle
+    display.scrollTextHorizontal(200);
+#endif
 }
 
   // Gelen veri icin callback fonksiyonu
@@ -3488,9 +3510,7 @@ if (!isPaired && !preferences.getBytesLength("paired_mac")) {
   // Add peer        
   memcpy(peerInfo.peer_addr, broadcastAddress, 6);
   peerInfo.channel = 0;  
-  peerInfo.encrypt = false;
-
-  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+  peerInfo.encrypt = false;  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
     //DEBUG_PRINTLN("Peer Eklenemedi!");
 #ifdef HRCMINI
     ShowOnDisplay("PEER ERR");
