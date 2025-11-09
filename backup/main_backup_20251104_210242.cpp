@@ -188,6 +188,7 @@ Preferences preferences;
 #include <WiFi.h>
 #include <esp_wifi.h>
 
+
 bool Serial1_mod = false;
 // Degiskenler
 #define MAX_PAIRED_DEVICES 6
@@ -212,19 +213,11 @@ int discoveredCount = 0;
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 esp_now_peer_info_t peerInfo;
 
-// Cached device name for performance optimization
-String cachedDeviceName = "";
-
 unsigned long buttonPressStartTime = 0; // Butona basılma baslangıc zamanı
 bool buttonPressed = false;
 
 // Last received RSSI value
 int lastReceivedRSSI = -50; // Default RSSI değeri
-
-// ESP-NOW delayed initialization flag
-bool espNowInitialized = false;
-unsigned long displayReadyTime = 0;
-const unsigned long ESP_NOW_INIT_DELAY = 2000; // 2 second delay after display ready
 
 #endif
 
@@ -2367,8 +2360,9 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
 
   if (strcmp(receivedData, "DEVICE_SCAN") == 0) {
     // Cihaz tarama mesajı alındı - kendini broadcast ile tanıt
-    // Device name'i cache'den al (performance optimized)
-    String deviceName = cachedDeviceName.isEmpty() ? "HRCMINI" : cachedDeviceName;
+    preferences.begin("wifi", true);
+    String deviceName = preferences.getString("ssid", "HRCMINI");
+    preferences.end();
     
     String response = "SCAN_RESPONSE|NODE:" + deviceName + "|MODEL:" + String(MODEL) + "|VER:v1.0.0";
     
@@ -2384,20 +2378,19 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
   else if (strcmp(receivedData, "PAIR_REQUEST") == 0) {
     //DEBUG_PRINTLN("Eslesme Istegi Alindi!");
     
-    // Device name'i cache'den al (performance optimized)
-    String deviceName = cachedDeviceName.isEmpty() ? "HRCMINI" : cachedDeviceName;
+    // SSID'yi doğru namespace'den oku
+    preferences.begin("wifi", true);
+    String deviceName = preferences.getString("ssid", "HRCMINI");
+    preferences.end();
     
     String response = "PAIR_RESPONSE|NODE:" + deviceName + "|MODEL:" + String(MODEL) + "|VER:v1.0.0";
-    
-    // Direkt ESP-NOW ile gönder
-    esp_now_send(mac_addr, (uint8_t *)response.c_str(), response.length());
-    
-    isPaired = true;
-    SavePairedMac(mac_addr);
-    AddPeer(mac_addr);
+	esp_now_send(mac_addr, (uint8_t *)response.c_str(), response.length());
+  isPaired = true;
+	SavePairedMac(mac_addr);
+	AddPeer(mac_addr);
 #ifdef HRCMINI
-    ShowOnDisplay("BAGLANDI!");
-    sonformattedText = "";
+	ShowOnDisplay("BAGLANDI!");
+	sonformattedText = "";
 #endif
     return;
   }
@@ -2622,9 +2615,12 @@ void SendData(String data) {
     int rssi = WiFi.RSSI(); // WiFi RSSI al
     if (rssi == 0) rssi = lastReceivedRSSI; // ESP-NOW modunda last received RSSI kullan
     
-    // Device name'i cache'den al (performance optimized - 5-10ms faster)
-    String deviceName = cachedDeviceName.isEmpty() ? "HRCMINI" : cachedDeviceName;
+    // SSID'yi doğru namespace'den oku
+    preferences.begin("wifi", true);
+    String deviceName = preferences.getString("ssid", "HRCMINI"); // SSID'yi NAME olarak kullan
+    preferences.end();
     
+    //DEBUG_PRINTLN("🔍 Debug - SSID: " + deviceName); // Debug için
     String formattedData = deviceName + "|" + MODEL + "|" + String(rssi) + "|CMD|" + data;
     
     esp_err_t result = esp_now_send(pairedMacList[i], (uint8_t *)formattedData.c_str(), formattedData.length());
@@ -2632,16 +2628,6 @@ void SendData(String data) {
     
     DEBUG_PRINTLN("📤 ESP-NOW Sent: " + formattedData);
   }
-}
-#endif
-
-#ifdef ESPNOW
-// Cache refresh function for device name
-void refreshDeviceNameCache() {
-  preferences.begin("wifi", true);
-  cachedDeviceName = preferences.getString("ssid", "HRCMINI");
-  preferences.end();
-  DEBUG_PRINTLN("📝 Device name cache refreshed: " + cachedDeviceName);
 }
 #endif
 
@@ -2658,12 +2644,6 @@ void startWebServer() {
       if (password.length() > 0) {
         SavePassword(password);
       }
-      
-#ifdef ESPNOW
-      // Cache'i güncelle
-      refreshDeviceNameCache();
-#endif
-      
       request->send(200, "text/plain", "Wi-Fi ayarları kaydedildi");
       ESP.restart();
     } else {
@@ -3269,93 +3249,6 @@ void printToEscPos(String data) {
 #endif
 
 /*--------------------------------------------------------------------------------------
-  delayedInitializeESPNOW
-  ESP-NOW başlatmasını display hazır olduktan sonra yapar
---------------------------------------------------------------------------------------*/
-#ifdef ESPNOW
-void delayedInitializeESPNOW() {
-  if (espNowInitialized) return; // Zaten başlatıldıysa çık
-  
-  DEBUG_PRINTLN("🚀 ESP-NOW gecikmeli başlatılıyor...");
-  
-  // ESP-NOW başlat
-  if (esp_now_init() != ESP_OK) {
-    DEBUG_PRINTLN("ESP-NOW Başlatılamadı!");
-#ifdef HRCMINI
-    ShowOnDisplay("ESP ERR");
-#endif
-#ifdef HRCNANO
-    display.message = "BAGLANTI YOK"; // Sabit pozisyon belirle
-    display.scrollTextHorizontal(200);
-#endif
-    return;
-  } else {
-    // Device name'i cache'e yükle (performance optimization)
-    preferences.begin("wifi", true);
-    cachedDeviceName = preferences.getString("ssid", "HRCMINI");
-    preferences.end();
-    DEBUG_PRINTLN("✅ Device name cached: " + cachedDeviceName);
-    
-    // TX Power ayarla - maksimum güç (20 dBm = 100mW)
-    WiFi.setTxPower(WIFI_POWER_19_5dBm); // Maksimum güç
-    DEBUG_PRINTLN("📡 ESP-NOW TX Power ayarlandı: 19.5 dBm");
-  }
-  
-  // Daha önce eşleşmiş cihaz var mı kontrol et
-  LoadPairedMac();
-
-  if (!isPaired && !preferences.getBytesLength("paired_mac")) {
-    DEBUG_PRINTLN("Eşleşmiş Cihaz Yok. Eşleşme Bekleniyor.");
-#ifdef HRCMINI
-    ShowOnDisplay("ESLESME YOK..");
-#endif
-#ifdef HRCNANO
-    display.message = "ESLESME YOK.."; // Sabit pozisyon belirle
-    display.scrollTextHorizontal(200);
-#endif
-    Serial1_mod = true; 
-  } else {
-    PrintMacAddress(pairedMacList[0]);
-    
-    // 'i' değişkenini 0 olarak başlat ve kayıtlı cihaz sayısına göre döngü yap
-    int maxDeviceCount = sizeof(pairedMacList) / sizeof(pairedMacList[0]);
-    for (int i = 0; i < pairedDeviceCount && i < maxDeviceCount; i++) {
-        if (pairedMacList[i] != nullptr) { // Geçerli MAC adresi kontrolü
-            DEBUG_PRINTF("Peer eklendi: Cihaz %d\n", i);
-        } else {
-            DEBUG_PRINTF("Geçersiz MAC adresi: Cihaz %d\n", i);
-        }
-    }
-#ifdef HRCNANO
-    display.message = "BAGLANTI KURULUYOR.."; // Sabit pozisyon belirle
-    display.scrollTextHorizontal(200);
-#endif
-  }
-
-  // Gelen veri için callback fonksiyonu
-  esp_now_register_recv_cb(OnDataRecv);
-  // Gönderim durumu için callback fonksiyonu
-  esp_now_register_send_cb(OnDataSent);
-
-  // Add peer        
-  memcpy(peerInfo.peer_addr, broadcastAddress, 6);
-  peerInfo.channel = 0;  
-  peerInfo.encrypt = false;  
-  
-  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-#ifdef HRCMINI
-    ShowOnDisplay("PEER ERR");
-#endif
-  } else {
-    DEBUG_PRINTLN("Peer Başarıyla Eklendi.");
-  }
-  
-  espNowInitialized = true;
-  DEBUG_PRINTLN("✅ ESP-NOW gecikmeli başlatma tamamlandı!");
-}
-#endif
-
-/*--------------------------------------------------------------------------------------
   setup
   Called by the Arduino architecture before the main loop begins
 --------------------------------------------------------------------------------------*/
@@ -3535,10 +3428,76 @@ Serial1.begin(115200, SERIAL_8N1, 17, 16);
 
   startHiddenAP();
   startWebServer();
-  
-  // ESP-NOW gecikmeli başlatma için timer ayarla
-  displayReadyTime = millis();
-  DEBUG_PRINTLN("⏰ ESP-NOW başlatma timer'ı ayarlandı - 2 saniye bekleniyor...");
+  // ESP-NOW baslat
+  if (esp_now_init() != ESP_OK) {
+    DEBUG_PRINTLN("ESP-NOW Baslatilamadi!");
+#ifdef HRCMINI
+#endif
+#ifdef HRCNANO
+	display.message = "BAGLANTI YOK"; // Sabit pozisyon belirle
+	display.scrollTextHorizontal(200);
+#endif
+    return;
+  } else {
+    //DEBUG_PRINTLN("ESP-NOW Baslatildi!");
+    
+    // TX Power ayarla - maksimum güç (20 dBm = 100mW)
+    WiFi.setTxPower(WIFI_POWER_19_5dBm); // Maksimum güç
+    //DEBUG_PRINTLN("📡 ESP-NOW TX Power ayarlandi: 19.5 dBm");
+    
+    // Startup sequence loop'ta başlatılacak
+  }
+  // Daha once eslesmis cihaz var mı kontrol et
+  LoadPairedMac();
+
+if (!isPaired && !preferences.getBytesLength("paired_mac")) {
+    DEBUG_PRINTLN("Eslesmis Cihaz Yok. Eslesme Bekleniyor.");
+#ifdef HRCMINI
+    ShowOnDisplay("ESLESME YOK..");
+#endif
+#ifdef HRCNANO
+	display.message = "ESLESME YOK.."; // Sabit pozisyon belirle
+	display.scrollTextHorizontal(200);
+#endif
+    Serial1_mod = true; 
+} else {
+    //DEBUG_PRINTLN("Eslesmis cihaz bulundu:");
+    PrintMacAddress(pairedMacList[0]);
+    
+    // 'i' degiskenini 0 olarak baslat ve kayıtlı cihaz sayısına gore dongu yap
+    int maxDeviceCount = sizeof(pairedMacList) / sizeof(pairedMacList[0]);
+    for (int i = 0; i < pairedDeviceCount && i < maxDeviceCount; i++) {
+        if (pairedMacList[i] != nullptr) { // Gecerli MAC adresi kontrolu
+            //AddPeer(pairedMacList[i]); // Eslesmis cihazı peer olarak ekle
+            DEBUG_PRINTF("Peer eklendi: Cihaz %d\n", i);
+        } else {
+            DEBUG_PRINTF("Gecersiz MAC adresi: Cihaz %d\n", i);
+        }
+    }
+#ifdef HRCNANO
+	display.message = "BAGLANTI KURULUYOR.."; // Sabit pozisyon belirle
+	display.scrollTextHorizontal(200);
+#endif
+}
+
+  // Gelen veri icin callback fonksiyonu
+  esp_now_register_recv_cb(OnDataRecv);
+  // Gonderim durumu icin callback fonksiyonu
+  esp_now_register_send_cb(OnDataSent);
+
+  // Add peer        
+  memcpy(peerInfo.peer_addr, broadcastAddress, 6);
+  peerInfo.channel = 0;  
+  peerInfo.encrypt = false;
+
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+    //DEBUG_PRINTLN("Peer Eklenemedi!");
+#ifdef HRCMINI
+    ShowOnDisplay("PEER ERR");
+#endif
+  } else {
+    DEBUG_PRINTLN("Peer Basariyla Eklendi.");
+  }
 #endif
 #ifdef HRCMINI
 ShowOnDisplay("HRCMINI");
@@ -3580,13 +3539,6 @@ unsigned long timeoutDuration = 200; // 2 saniye
 bool beepYapildi = false;
 
 void loop(void) {
-#ifdef ESPNOW
-  // ESP-NOW gecikmeli başlatma kontrolü
-  if (!espNowInitialized && (millis() - displayReadyTime > ESP_NOW_INIT_DELAY)) {
-    delayedInitializeESPNOW();
-  }
-#endif
-
 #ifdef LEADER
   // 1. Veri geldikçe string'e ekle
   while (Serial.available()) {
