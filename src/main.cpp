@@ -15,6 +15,7 @@
 
 /*MODEL*/
 #define MODEL "HRCMINI"
+//#define MODEL "HRCMAXI"
 /*MODEL*/
 
 //#define LEADER
@@ -28,6 +29,7 @@ bool debugEnabled = true; // Başlangıçta açık
 #define DEBUG_PRINTF(...) if(debugEnabled) { Serial.printf(__VA_ARGS__); }
 
 #include <Arduino.h>
+
 
 #ifdef HRCMESAJ_RGB
 
@@ -233,7 +235,8 @@ const unsigned long ESP_NOW_INIT_DELAY = 2000; // 2 second delay after display r
 #include "fonts/Segfont_7x16.h"
 #include "fonts/Segfont_Sayi_Harf.h"
 #include "fonts/Arial_38b.h"
-#include "fonts/Comic24.h"
+// Binary define çakışması olan font dosyası devre dışı - Arduino 3.x uyumluluk için
+// #include "fonts/Comic24.h"  // Arduino 3.x'te binary define çakışması var
 #include "fonts/Arial_Black_16.h"
 #include "fonts/SystemFont5x7.h"
 #include "fonts/SystemFont5x7_ENDUTEK.h"
@@ -253,8 +256,9 @@ const unsigned long ESP_NOW_INIT_DELAY = 2000; // 2 second delay after display r
 #endif
 DMD dmd(DISPLAYS_ACROSS, DISPLAYS_DOWN);
 
-// Timer ayarları
-hw_timer_t *timer = NULL;
+
+  // Arduino 2.x - Eski timer API
+  hw_timer_t *timer = NULL;
 
 // Ekranda metin gosterme fonksiyonu
 void ekran_goster(int imlec_x, int imlec_y, String msg_s) {
@@ -264,23 +268,48 @@ void ekran_goster(int imlec_x, int imlec_y, String msg_s) {
   sprintf(msg_c, "%-15s", msg_s.c_str());  // Boslukları doldur
   dmd.drawString(imlec_x, imlec_y, msg_c, 15, GRAPHICS_NORMAL);
 }
+ // Arduino 2.x - Hardware timer ISR
+  void IRAM_ATTR triggerScan() {
+    digitalWrite(PIN_DMD_nOE, LOW); // LED'leri aç
+    dmd.scanDisplayBySPI();
+    digitalWrite(PIN_DMD_nOE, HIGH); // LED'leri kapat
+  }
 
-// DMD tarama islevi
-void IRAM_ATTR triggerScan() {
-  digitalWrite(PIN_DMD_nOE, LOW); // LED'leri aç
-  dmd.scanDisplayBySPI();
-  digitalWrite(PIN_DMD_nOE, HIGH); // LED'leri kapat
-}
+// WiFi islemleri sırasında DMD taramayı durdurup tekrar baslatma - Arduino 2.x/3.x uyumlu
+static bool dmdPaused = false; // Guard: DMD durumu takibi
 
-// WiFi islemleri sırasında DMD taramayı durdurup tekrar baslatma
 void pauseDMD() {
-  timerAlarmDisable(timer);  // DMD tarama zamanlayıcısını durdurun
-  DEBUG_PRINTLN("DMD tarama durduruldu");
+#if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+  if (dmdPaused) {
+    DEBUG_PRINTLN("⚠️ DMD zaten durdurulmuş, tekrar durdurma atlandı");
+    return; // Zaten durdurulmuş, tekrar durdurma
+  }
+  // Arduino 2.x - Hardware timer durdur
+  if (timer) {
+    timerAlarmDisable(timer);
+    dmdPaused = true;
+  }
+  DEBUG_PRINTLN("✅ DMD tarama durduruldu");
+#else
+  // DMD olmayan varyantlar için boş fonksiyon
+#endif
 }
 
 void resumeDMD() {
-  timerAlarmEnable(timer);  // DMD tarama zamanlayıcısını tekrar baslatın
-  DEBUG_PRINTLN("DMD tarama yeniden baslatıldı");
+#if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+  if (!dmdPaused) {
+    DEBUG_PRINTLN("⚠️ DMD zaten çalışıyor, tekrar başlatma atlandı");
+    return; // Zaten çalışıyor, tekrar başlatma
+  }
+  // Arduino 2.x - Hardware timer başlat
+  if (timer) {
+    timerAlarmEnable(timer);
+    dmdPaused = false;
+  }
+  DEBUG_PRINTLN("✅ DMD tarama yeniden baslatıldı");
+#else
+  // DMD olmayan varyantlar için boş fonksiyon
+#endif
 }
 
 #if defined(HRCZAMAN)
@@ -505,7 +534,7 @@ bool displayMessageQueued = false;
 // Startup message sequence
 unsigned long startupMessageTimer = 0;
 int startupMessageIndex = -1;
-String startupMessages[] = {"HRCMINI", " BILTER"};
+String startupMessages[] = {"HRCMINI", " ENDUTEK"};
 int startupMessagesCount = 2;
 
 // Connection status tracking
@@ -521,9 +550,9 @@ void ShowOnDisplay(String message) {
     
     // ENDUTEK ve uzun mesajlar için kayan yazı kontrolü
     bool needsScrolling = false;
-    if (message == " BILTER" || (!isESPNOWMessage && message != "HATA" && message != "HRCMINI")) {
+    if (message == " ENDUTEK" || (!isESPNOWMessage && message != "HATA" && message != "HRCMINI")) {
         //  BILTER her zaman kayan yazı
-        if (message == " BILTER") {
+        if (message == " ENDUTEK") {
             needsScrolling = true;
             //DEBUG_PRINTLN(" BILTER - forced scroll animation");
         } else {
@@ -616,7 +645,7 @@ void addEspnowData(String message, String type) {
 }
 
 // Web sayfası ile firmware yuklemek icin HTML sayfası
-#if defined(HRCMINI) || defined(HRCMESAJ_RGB) || defined(HRCNANO)
+#if defined(HRCMINI) || defined(HRCMESAJ_RGB) || defined(HRCNANO) || defined(HRCMAXI)
 const char* upload_html = R"rawliteral(
 <!DOCTYPE html>
 <html lang="tr">
@@ -1674,7 +1703,7 @@ const char* upload_html = R"(
   </html>
   )";
 
-#elif defined(HRCMAXI)
+/*#elif defined(HRCMAXI)
 const char* upload_html = R"(
 	<!DOCTYPE html>
 	<html>
@@ -1687,7 +1716,7 @@ const char* upload_html = R"(
 	  </form>
   </body>
   </html>
-  )";
+  )";*/
 
 #elif defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
 const char* upload_html = R"(
@@ -1828,6 +1857,9 @@ const char* upload_html = R"(
 
 void SaveSSID(const String& ssid) {
   DEBUG_PRINTF("💾 SSID kaydediliyor: '%s'\n", ssid.c_str());
+  #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    pauseDMD(); // HTTP işlemi sırasında DMD'yi durdur
+  #endif
   
   preferences.begin("wifi", false);
   size_t written = preferences.putString("ssid", ssid);
@@ -1835,18 +1867,36 @@ void SaveSSID(const String& ssid) {
   
   DEBUG_PRINTF("✅ SSID kaydedildi, %zu bytes yazıldı\n", written);
   
+  delay(100); // Flash yazma işleminin tamamlanması için bekle
+  
   // Kayıt kontrolü
   preferences.begin("wifi", true);
   String verify = preferences.getString("ssid", "KAYIT_BASARISIZ");
   preferences.end();
   
-  DEBUG_PRINTF("🔍 Kayıt kontrolü: '%s'\n", verify.c_str());
+  DEBUG_PRINTF("🔍 Kayıt kontrolü: '%s' %s\n", verify.c_str(), 
+               (verify == ssid) ? "✅ BAŞARILI" : "❌ HATALI");
+  #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    resumeDMD(); // HTTP işlemi tamamlandıktan sonra DMD'yi yeniden başlat
+  #endif
 }
 
 void SavePassword(const String& password) {
+  DEBUG_PRINTF("💾 Password kaydediliyor...\n");
+  #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    pauseDMD(); // HTTP işlemi sırasında DMD'yi durdur
+  #endif
+  
   preferences.begin("wifi", false);
-  preferences.putString("password", password);
+  size_t written = preferences.putString("password", password);
   preferences.end();
+  
+  DEBUG_PRINTF("✅ Password kaydedildi, %zu bytes yazıldı\n", written);
+  
+  delay(100); // Flash yazma işleminin tamamlanması için bekle
+  #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    resumeDMD(); // HTTP işlemi tamamlandıktan sonra DMD'yi yeniden başlat
+  #endif
 }
 
 // Gizli AP modu baslat ve IP adresini 192.168.4.1 olarak ayarla
@@ -1872,7 +1922,10 @@ void startHiddenAP() {
   // Eğer varsayılan değer dönüyorsa manuel kontrol
   if (savedSSID == "HRC_DEFAULT") {
     DEBUG_PRINTLN("⚠️ Varsayılan SSID kullanılıyor, preferences boş olabilir!");
+  } else {
+    DEBUG_PRINTF("✅ Özel SSID bulundu: '%s'\n", savedSSID.c_str());
   }
+  
   // Gizli (SSID yayınlamayan) bir Access Point baslatma
   //WiFi.softAP(ssid, password, 1, 1);  // Gizli mod aktif
 
@@ -1911,29 +1964,6 @@ void startHiddenAP() {
 
 #ifdef ESPNOW
 
-void updatePeerStatus(const uint8_t *mac_addr, bool active) {
-  char macStr[18];
-  sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X", 
-          mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
-  
-  for (int i = 0; i < peerStatusCount; i++) {
-    if (memcmp(peerStatusList[i].mac, mac_addr, 6) == 0) {
-      if (peerStatusList[i].active != active) {
-        DEBUG_PRINTF("📊 Peer status değişti: %s -> %s\n", macStr, active ? "ACTIVE" : "INACTIVE");
-      }
-      peerStatusList[i].active = active;
-      return;
-    }
-  }
-
-  if (peerStatusCount < MAX_PAIRED_DEVICES) {
-    memcpy(peerStatusList[peerStatusCount].mac, mac_addr, 6);
-    peerStatusList[peerStatusCount].active = active;
-    peerStatusCount++;
-    DEBUG_PRINTF("📊 Yeni peer eklendi: %s -> %s\n", macStr, active ? "ACTIVE" : "INACTIVE");
-  }
-}
-
 // Aktif cihaz sayısını hesapla
 int getActiveDeviceCount() {
   int activeCount = 0;
@@ -1945,7 +1975,41 @@ int getActiveDeviceCount() {
   return activeCount;
 }
 
+void updatePeerStatus(const uint8_t *mac_addr, bool active) {
+  // DMD pause/resume kaldırıldı - performans optimizasyonu
+  char macStr[18];
+  sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X", 
+          mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+  
+  for (int i = 0; i < peerStatusCount; i++) {
+    if (memcmp(peerStatusList[i].mac, mac_addr, 6) == 0) {
+      if (peerStatusList[i].active != active) {
+        DEBUG_PRINTF("📊 Peer status değişti: %s -> %s\n", macStr, active ? "ACTIVE" : "INACTIVE");
+      }
+      peerStatusList[i].active = active;
+      pinMode(2, OUTPUT);
+      digitalWrite(2, getActiveDeviceCount() > 0 ? HIGH : LOW);
+      return;
+    }
+  }
+
+  if (peerStatusCount < MAX_PAIRED_DEVICES) {
+    memcpy(peerStatusList[peerStatusCount].mac, mac_addr, 6);
+    peerStatusList[peerStatusCount].active = active;
+    peerStatusCount++;
+    DEBUG_PRINTF("📊 Yeni peer eklendi: %s -> %s\n", macStr, active ? "ACTIVE" : "INACTIVE");
+    pinMode(2, OUTPUT);
+    digitalWrite(2, getActiveDeviceCount() > 0 ? HIGH : LOW);
+  }
+}
+
 void LoadPairedMac() {
+  // Scheduler başlamadan Preferences kullanmayı engelle
+  if (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) {
+    DEBUG_PRINTLN("⚠️ LoadPairedMac: Scheduler henüz başlamadı, atlanıyor");
+    return; // Henüz güvenli değil, çık
+  }
+  
   preferences.begin("espnow", true);
   int macDataLength = preferences.getBytesLength("paired_mac");
   pairedDeviceCount = macDataLength / 6;
@@ -1968,6 +2032,9 @@ void LoadPairedMac() {
 }
 
 void RemovePairedMac(const char* macStr) {
+  #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    pauseDMD(); // HTTP işlemi sırasında DMD'yi durdur
+  #endif
   DEBUG_PRINTF("🔍 MAC silme işlemi başlıyor: %s\n", macStr);
   
   // Önce preferences'tan güncel verileri oku
@@ -2052,11 +2119,17 @@ void RemovePairedMac(const char* macStr) {
   } else {
     DEBUG_PRINTF("⚠️ MAC adresi listede bulunamadı: %s\r\n", macStr);
   }
+#if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    resumeDMD(); // DMD'yi yeniden başlat
+#endif
 }
 
 void addToDiscoveredList(const uint8_t *mac_addr) {
   // MAC adresini debug için yazdır
   DEBUG_PRINT("🔍 Discovered listesine eklenmeye çalışılan MAC: ");
+  #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    pauseDMD(); // HTTP işlemi sırasında DMD'yi durdur
+  #endif
   for (int i = 0; i < 6; i++) {
     DEBUG_PRINTF("%02X", mac_addr[i]);
     if (i < 5) DEBUG_PRINT(":");
@@ -2078,6 +2151,9 @@ void addToDiscoveredList(const uint8_t *mac_addr) {
   } else {
     DEBUG_PRINTLN("⚠️ Discovered listesi dolu!");
   }
+  #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    resumeDMD(); // HTTP işlemi tamamlandıktan sonra DMD'yi yeniden başlat
+  #endif
 }
 
 void removeFromDiscoveredList(const uint8_t *mac_addr) {
@@ -2127,6 +2203,9 @@ void StartPairing() {
 void SavePairedMac(const uint8_t *newMac) {
   // MAC adresini debug için yazdır
   DEBUG_PRINT("💾 Kaydetmeye çalışılan MAC: ");
+  #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    pauseDMD(); // HTTP işlemi sırasında DMD'yi durdur
+  #endif
   for (int i = 0; i < 6; i++) {
     DEBUG_PRINTF("%02X", newMac[i]);
     if (i < 5) DEBUG_PRINT(":");
@@ -2183,6 +2262,9 @@ void SavePairedMac(const uint8_t *newMac) {
   if (!esp_now_is_peer_exist(newMac)) {
     esp_now_add_peer(&peerInfo);
   }
+  #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    resumeDMD(); // HTTP işlemi tamamlandıktan sonra DMD'yi yeniden başlat
+  #endif
 
   //DEBUG_PRINTLN("✅ Eşleşmiş MAC adresi kaydedildi.");
 }
@@ -2205,6 +2287,11 @@ String macToStr(const uint8_t *mac) {
 
 void SendPairRequest(const uint8_t *mac_addr) {
   DEBUG_PRINT("🎯 PAIR_REQUEST gönderilecek MAC: ");
+  
+  #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    pauseDMD(); // HTTP işlemi sırasında DMD'yi durdur
+  #endif
+
   PrintMacAddress(mac_addr);
   Serial.println();
   
@@ -2239,6 +2326,9 @@ void SendPairRequest(const uint8_t *mac_addr) {
   digitalWrite(LED_PIN, HIGH);
   delay(500);
   digitalWrite(LED_PIN, LOW);
+  #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    resumeDMD(); // HTTP işlemi tamamlandıktan sonra DMD'yi yeniden başlat
+  #endif
 }
 
 // Otomatik eşleştirme (buton ile)
@@ -2247,6 +2337,9 @@ void StartAutoPairing() {
   
 #ifdef HRCMINI
   ShowOnDisplay("ESLESME...");
+#endif
+#ifdef HRCMAXI
+    dmd.drawString(0, 0, "ESLESME ", 9, GRAPHICS_NORMAL);
 #endif
 
   // Önce keşfedilen listeyi temizle
@@ -2287,6 +2380,9 @@ void StartAutoPairing() {
 #ifdef HRCMINI
       ShowOnDisplay("ESLESTI!");
 #endif
+#ifdef HRCMAXI
+    dmd.drawString(0, 0, "ESLESTI ", 9, GRAPHICS_NORMAL);
+#endif
       
       // Başarı LED'i
       for (int i = 0; i < 5; i++) {
@@ -2317,6 +2413,9 @@ void StartAutoPairing() {
 #ifdef HRCMINI
     ShowOnDisplay("HATA");
 #endif
+#ifdef HRCMAXI
+    dmd.drawString(0, 0, "  HATA  ", 9, GRAPHICS_NORMAL);
+#endif
   }
 }
 
@@ -2341,6 +2440,11 @@ void AddPeer(const uint8_t *mac_addr) {
 }
 
 void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
+  // Scheduler başlamadan callback çalışmasını engelle
+  if (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) {
+    return; // Henüz güvenli değil, çık
+  }
+  
   hata_timer = millis();
   char receivedData[len + 1];
   memcpy(receivedData, data, len);
@@ -2368,7 +2472,7 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
   if (strcmp(receivedData, "DEVICE_SCAN") == 0) {
     // Cihaz tarama mesajı alındı - kendini broadcast ile tanıt
     // Device name'i cache'den al (performance optimized)
-    String deviceName = cachedDeviceName.isEmpty() ? "HRCMINI" : cachedDeviceName;
+    String deviceName = cachedDeviceName.isEmpty() ? "HRC" : cachedDeviceName;
     
     String response = "SCAN_RESPONSE|NODE:" + deviceName + "|MODEL:" + String(MODEL) + "|VER:v1.0.0";
     
@@ -2385,7 +2489,7 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
     //DEBUG_PRINTLN("Eslesme Istegi Alindi!");
     
     // Device name'i cache'den al (performance optimized)
-    String deviceName = cachedDeviceName.isEmpty() ? "HRCMINI" : cachedDeviceName;
+    String deviceName = cachedDeviceName.isEmpty() ? "HRC" : cachedDeviceName;
     
     String response = "PAIR_RESPONSE|NODE:" + deviceName + "|MODEL:" + String(MODEL) + "|VER:v1.0.0";
     
@@ -2398,6 +2502,9 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
 #ifdef HRCMINI
     ShowOnDisplay("BAGLANDI!");
     sonformattedText = "";
+#endif
+#ifdef HRCMAXI
+    dmd.drawString(0, 0, "BAGLANDI", 9, GRAPHICS_NORMAL);
 #endif
     return;
   }
@@ -2424,7 +2531,13 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
 	  ShowOnDisplay("BAGLANDI!");
 	  sonformattedText = "";
 #endif
+#ifdef HRCMAXI
+    dmd.drawString(0, 0, "BAGLANDI", 9, GRAPHICS_NORMAL);
+#endif
     return;
+  }
+  else if (strncmp(receivedData, "STATUS|", 7) == 0) {
+        return; // STATUS mesajları için başka işlem yapma
   }
 
   else if (strcmp(receivedData, "inddara") == 0) {
@@ -2607,31 +2720,36 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
 }
 
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
-updatePeerStatus(mac_addr, status == ESP_NOW_SEND_SUCCESS);
+  // Scheduler başlamadan callback çalışmasını engelle
+  if (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) {
+    return; // Henüz güvenli değil, çık
+  }
+  
+  updatePeerStatus(mac_addr, status == ESP_NOW_SEND_SUCCESS);
 }
 
 void SendData(String data) {
   if (!isPaired || pairedDeviceCount == 0) return;
 
+  // Tüm peer'lar için ortak veriyi bir kez hazırla (performans optimizasyonu)
+  int rssi = WiFi.RSSI(); // WiFi RSSI al
+  if (rssi == 0) rssi = lastReceivedRSSI; // ESP-NOW modunda last received RSSI kullan
+  
+  // Device name'i cache'den al (performance optimized - 5-10ms faster)
+  String deviceName = cachedDeviceName.isEmpty() ? "HRCMINI" : cachedDeviceName;
+  
+  String formattedData = deviceName + "|" + MODEL + "|" + String(rssi) + "|CMD|" + data;
+  
+  // Tüm cihazlara aynı veriyi gönder - asenkron, bekleme yok!
   for (int i = 0; i < pairedDeviceCount; i++) {
-    // Web monitörü için ESP-NOW giden veriyi kaydet
-    String macStr = macToStr(pairedMacList[i]);
-    addEspnowData("To " + macStr + ": " + data, "out");
-    
-    // Yeni format: NAME|MODEL|RSSI|CMD|DATA
-    int rssi = WiFi.RSSI(); // WiFi RSSI al
-    if (rssi == 0) rssi = lastReceivedRSSI; // ESP-NOW modunda last received RSSI kullan
-    
-    // Device name'i cache'den al (performance optimized - 5-10ms faster)
-    String deviceName = cachedDeviceName.isEmpty() ? "HRCMINI" : cachedDeviceName;
-    
-    String formattedData = deviceName + "|" + MODEL + "|" + String(rssi) + "|CMD|" + data;
-    
-    esp_err_t result = esp_now_send(pairedMacList[i], (uint8_t *)formattedData.c_str(), formattedData.length());
-    updatePeerStatus(pairedMacList[i], result == ESP_OK);
-    
-    DEBUG_PRINTLN("📤 ESP-NOW Sent: " + formattedData);
+    // esp_now_send callback beklemez, hemen gönderir (asenkron)
+    esp_now_send(pairedMacList[i], (uint8_t *)formattedData.c_str(), formattedData.length());
+    // Not: Peer status OnDataSent callback'inde güncellenecek
   }
+  
+  // Web monitörü için sadece bir kez kaydet
+  addEspnowData("To " + String(pairedDeviceCount) + " devices: " + data, "out");
+  DEBUG_PRINTLN("📤 ESP-NOW Sent to " + String(pairedDeviceCount) + " devices: " + formattedData);
 }
 #endif
 
@@ -2648,12 +2766,18 @@ void refreshDeviceNameCache() {
 // Web sunucusunu baslat
 void startWebServer() {
   server.on("/update_ssid", HTTP_POST, [](AsyncWebServerRequest *request){
+    #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    pauseDMD(); // HTTP işlemi sırasında DMD'yi durdur
+    #endif
     if (request->hasParam("ssid", true)) {
       String newSSID = request->getParam("ssid", true)->value();
       String password = "";
       if (request->hasParam("password", true)) {
         password = request->getParam("password", true)->value();
       }
+      
+      DEBUG_PRINTF("🌐 SSID güncelleme isteği - Yeni SSID: '%s'\n", newSSID.c_str());
+      
       SaveSSID(newSSID);
       if (password.length() > 0) {
         SavePassword(password);
@@ -2664,10 +2788,20 @@ void startWebServer() {
       refreshDeviceNameCache();
 #endif
       
-      request->send(200, "text/plain", "Wi-Fi ayarları kaydedildi");
+      request->send(200, "text/plain", "Wi-Fi ayarları kaydedildi, yeniden başlatılıyor...");
+      
+      DEBUG_PRINTLN("⏳ Restart öncesi flash yazma tamamlanması bekleniyor...");
+      delay(500); // Flash yazma işleminin kesinlikle tamamlanması için yeterli bekleme
+      #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+      resumeDMD(); // Restart öncesi DMD'yi temizle
+      #endif
+      DEBUG_PRINTLN("🔄 ESP32 yeniden başlatılıyor...");
       ESP.restart();
     } else {
       request->send(400, "text/plain", "SSID parametresi eksik");
+      #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+      resumeDMD(); // Hata durumunda DMD'yi yeniden başlat
+      #endif
     }
   });
 
@@ -2737,8 +2871,47 @@ void startWebServer() {
     request->send(200, "text/plain", debugEnabled ? "true" : "false");
   });
 
+  // NVS Temizleme ve Test endpoint'i
+  server.on("/reset_nvs", HTTP_POST, [](AsyncWebServerRequest *request){
+    DEBUG_PRINTLN("🗑️ NVS temizleme başlatılıyor...");
+    
+    // WiFi namespace'ini tamamen temizle
+    preferences.begin("wifi", false);
+    preferences.clear(); // Tüm wifi anahtarlarını sil
+    preferences.end();
+    
+    DEBUG_PRINTLN("✅ WiFi namespace temizlendi");
+    
+    request->send(200, "text/plain", "NVS temizlendi. Şimdi /update_ssid ile yeni SSID kaydedin.");
+  });
+
+  // Tüm Preferences Debug endpoint'i
+  server.on("/debug_prefs", HTTP_GET, [](AsyncWebServerRequest *request){
+    DynamicJsonDocument doc(512);
+    
+    preferences.begin("wifi", true);
+    doc["ssid"] = preferences.getString("ssid", "EMPTY");
+    doc["ssid_len"] = preferences.getBytesLength("ssid");
+    doc["password_len"] = preferences.getBytesLength("password");
+    preferences.end();
+    
+    preferences.begin("settings", true);
+    doc["brightness"] = preferences.getInt("brightness", -1);
+    doc["debug"] = preferences.getBool("debug", false);
+    preferences.end();
+    
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+  });
+
   // Serial veri logları endpoint
   server.on("/serial_data", HTTP_GET, [](AsyncWebServerRequest *request){
+    // Büyük JSON yanıtları için DMD'yi geçici durdur
+    #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    pauseDMD();
+    #endif
+    
     DynamicJsonDocument doc(2048);
     JsonArray data = doc.createNestedArray("data");
     
@@ -2755,10 +2928,20 @@ void startWebServer() {
     String response;
     serializeJson(doc, response);
     request->send(200, "application/json", response);
+    
+    // JSON gönderildikten sonra DMD'yi yeniden başlat
+    #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    resumeDMD();
+    #endif
   });
 
   // ESP-NOW veri logları endpoint
   server.on("/espnow_data", HTTP_GET, [](AsyncWebServerRequest *request){
+    // Büyük JSON yanıtları için DMD'yi geçici durdur
+    #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    pauseDMD();
+    #endif
+    
     DynamicJsonDocument doc(2048);
     JsonArray data = doc.createNestedArray("data");
     
@@ -2776,6 +2959,11 @@ void startWebServer() {
     String response;
     serializeJson(doc, response);
     request->send(200, "application/json", response);
+    
+    // JSON gönderildikten sonra DMD'yi yeniden başlat
+    #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    resumeDMD();
+    #endif
   });
 
   // Ekran test endpoint'leri
@@ -2876,6 +3064,11 @@ void startWebServer() {
   server.on("/mac_list", HTTP_GET, [](AsyncWebServerRequest *request){
     //DEBUG_PRINTF("🌐 /mac_list çağrıldı. Paired: %d, Discovered: %d\n", pairedDeviceCount, discoveredCount);
     
+    // Büyük JSON yanıtları için DMD'yi geçici durdur
+    #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    pauseDMD();
+    #endif
+    
     DynamicJsonDocument doc(2048);
 
     // ✅ Güncel eşleşen cihazlar
@@ -2914,6 +3107,11 @@ void startWebServer() {
     String out;
     serializeJson(doc, out);
     request->send(200, "application/json", out);
+    
+    // JSON gönderildikten sonra DMD'yi yeniden başlat
+    #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+    resumeDMD();
+    #endif
   });
 
   server.on("/add_mac", HTTP_POST, [](AsyncWebServerRequest *request){
@@ -3238,23 +3436,23 @@ void printToEscPos(String data) {
     //String pi = data.substring(9, 34);
 	yazicikomut(orta_font, sizeof(orta_font));
 	yazicikomut(orta, sizeof(orta));
-  Serial1.println(data.substring(9, 36));
-	Serial1.println(data.substring(36, 61));
-	Serial1.println(data.substring(61, 86));
-	Serial1.println(data.substring(86, 111));
-	Serial1.println(data.substring(111, 136));
+  Serial1.println(data.substring(8, 33));
+	Serial1.println(data.substring(33, 56));
+	Serial1.println(data.substring(56, 81));
+	Serial1.println(data.substring(81, 105));
+	Serial1.println(data.substring(105, 130));
 	yazicikomut(sol, sizeof(sol));
 	Serial1.println();
-	Serial1.println("TARiH : "+ data.substring(160, 168));
-	Serial1.println("SAAT  : "+ data.substring(151, 159));
-	Serial1.println("FiS NO: "+ data.substring(182, 188));
+	Serial1.println("TARiH : "+ data.substring(147, 155));
+	Serial1.println("SAAT  : "+ data.substring(138, 146));
+	Serial1.println("FiS NO: "+ data.substring(168, 174));
 	yazicikomut(buyuk_font, sizeof(buyuk_font));
 	Serial1.println("--------------------");
-	Serial1.println("\nTOPLAM KG "+ data.substring(228, 238));
+	Serial1.println("\nTOPLAM KG "+ data.substring(212, 222));
 	yazicikomut(orta_font, sizeof(orta_font));
 	Serial1.println();
 	yazicikomut(sol, sizeof(sol));
-	Serial1.println("\nDARA KG : "+ data.substring(241, 247));
+	Serial1.println("\nDARA KG : "+ data.substring(223, 229));
 	yazicikomut(buyuk_font, sizeof(buyuk_font));
 	Serial1.println("--------------------");
 	Serial1.println("\n\n\n");
@@ -3275,6 +3473,15 @@ void printToEscPos(String data) {
 #ifdef ESPNOW
 void delayedInitializeESPNOW() {
   if (espNowInitialized) return; // Zaten başlatıldıysa çık
+#if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+  pauseDMD();
+#endif
+  
+  // Scheduler başlamadan Preferences/ESP-NOW kullanmayı engelle
+  if (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) {
+    DEBUG_PRINTLN("⚠️ delayedInitializeESPNOW: Scheduler henüz başlamadı, atlanıyor");
+    return; // Henüz güvenli değil, çık
+  }
   
   DEBUG_PRINTLN("🚀 ESP-NOW gecikmeli başlatılıyor...");
   
@@ -3297,8 +3504,8 @@ void delayedInitializeESPNOW() {
     DEBUG_PRINTLN("✅ Device name cached: " + cachedDeviceName);
     
     // TX Power ayarla - maksimum güç (20 dBm = 100mW)
-    WiFi.setTxPower(WIFI_POWER_19_5dBm); // Maksimum güç
-    DEBUG_PRINTLN("📡 ESP-NOW TX Power ayarlandı: 19.5 dBm");
+    //WiFi.setTxPower(WIFI_POWER_19_5dBm); // Maksimum güç
+    //DEBUG_PRINTLN("📡 ESP-NOW TX Power ayarlandı: 19.5 dBm");
   }
   
   // Daha önce eşleşmiş cihaz var mı kontrol et
@@ -3352,8 +3559,17 @@ void delayedInitializeESPNOW() {
   
   espNowInitialized = true;
   DEBUG_PRINTLN("✅ ESP-NOW gecikmeli başlatma tamamlandı!");
+#if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
+  resumeDMD();
+#endif
 }
 #endif
+
+void espnowInitTask(void *param) {
+    vTaskDelay(ESP_NOW_INIT_DELAY / portTICK_PERIOD_MS);
+    delayedInitializeESPNOW();
+    vTaskDelete(NULL);
+}
 
 /*--------------------------------------------------------------------------------------
   setup
@@ -3465,7 +3681,7 @@ Serial1.begin(115200, SERIAL_8N1, 17, 16);
 #endif
 
 #if defined(HRCMESAJ) || defined(HRCMAXI) || defined(HRCZAMAN)
-  // Timer baslatma - Eski API (ESP32 Arduino Framework 2.x)
+  // Arduino 2.x - Hardware timer API
   timer = timerBegin(0, 80, true);  // Timer 0, 80 prescaler, count up
   timerAttachInterrupt(timer, &triggerScan, true);
   timerAlarmWrite(timer, 300, true);  // 300µs interrupt
@@ -3477,17 +3693,17 @@ Serial1.begin(115200, SERIAL_8N1, 17, 16);
   xTaskCreatePinnedToCore(
     wifiTask,        // Gorevin adı
     "WiFi Task",     // Gorev acıklaması
-    8192,            // Yıgın boyutu
+    4096,            // Yıgın boyutu
     NULL,            // Parametre
-    2,               // Öncelik
+    1,               // Öncelik
     NULL,            // Gorev tutucu
-    0                // Çekirdek (0 veya 1)
+    1                // Çekirdek (0 veya 1)
   );
 #if defined(HRCMESAJ)
   dmd.drawString(0, 0, "HRCMESAJ ", 8, GRAPHICS_NORMAL);
 #elif defined(HRCMAXI)
   dmd.drawString(0, 0, " HRCMAXI ", 8, GRAPHICS_NORMAL);
-  //delay(2000);
+  delay(2000);
   //dmd.clearScreen(true);
   //dmd.selectFont(Segfont_7x16);
   //dmd.selectFont(Arial_Black_16);
@@ -3497,9 +3713,9 @@ Serial1.begin(115200, SERIAL_8N1, 17, 16);
 #elif defined(HRCZAMAN)  
 	//dmd.drawString(0, 0, " ENDUTEK ", 8, GRAPHICS_NORMAL);
 #endif
-	//dmd.drawString(0, 0, "   MEGA  ", 8, GRAPHICS_NORMAL);
+	dmd.drawString(0, 0, "   MEGA  ", 8, GRAPHICS_NORMAL);
 	//delay(2000);
-  dmd.clearScreen(true);
+  //dmd.clearScreen(true);
 #ifdef MODBUS_RTU
 	modbusSerial.begin(19200, SERIAL_7E1, 5, 16);
 #endif
@@ -3527,23 +3743,22 @@ Serial1.begin(115200, SERIAL_8N1, 17, 16);
   DEBUG_PRINTF("✅ Parlaklık yüklendi: %d%% (intensity: %d)\n", savedBrightness, intensity);
   
   startupMessageTimer = millis();
+  startHiddenAP();
+  startWebServer();
 #endif
 #ifdef ESPNOW
   pinMode(PAIR_BUTTON, INPUT_PULLUP);
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
-
-  startHiddenAP();
-  startWebServer();
   
   // ESP-NOW gecikmeli başlatma için timer ayarla
   displayReadyTime = millis();
-  DEBUG_PRINTLN("⏰ ESP-NOW başlatma timer'ı ayarlandı - 2 saniye bekleniyor...");
+  DEBUG_PRINTLN("⏰ ESP-NOW başlatma timer'ı ayarlandı - 8 saniye bekleniyor...");
 #endif
 #ifdef HRCMINI
 ShowOnDisplay("HRCMINI");
 delay(2000);
-ShowOnDisplay(" BILTER");
+ShowOnDisplay(" ENDUTEK");
 delay(3000);
 
 // Startup tamamlandı
@@ -3561,6 +3776,8 @@ hata = false;
 #if defined(HRCMAXI) || defined(HRCZAMAN) || defined(HRCMESAJ)
   delay(2000);
   dmd.clearScreen(true);
+  hata_timer = millis(); // HATA timer'ını başlat
+  hata = false;
 #endif
 
 }
@@ -3576,19 +3793,19 @@ unsigned long startMillis = millis();  // Baslangıc zamanı
 
 String serialData = "";
 unsigned long lastCharTime = 0;
-unsigned long timeoutDuration = 200; // 2 saniye
+unsigned long timeoutDuration = 400; // 2 saniye
 bool beepYapildi = false;
 
 void loop(void) {
 #ifdef ESPNOW
-  // ESP-NOW gecikmeli başlatma kontrolü
+  // ESP-NOW gecikmeli başlatma kontrolü (scheduler çalıştıktan sonra)
   if (!espNowInitialized && (millis() - displayReadyTime > ESP_NOW_INIT_DELAY)) {
     delayedInitializeESPNOW();
   }
 #endif
 
 #ifdef LEADER
-  // 1. Veri geldikçe string'e ekle
+  // 1. Veri geldikçe string'e ekle (sadece yazdırılabilir karakterler)
   while (Serial.available()) {
     if (!beepYapildi) {
       yazicikomut(beep, sizeof(beep));  // 🔔 İlk karakterde beep
@@ -3596,15 +3813,33 @@ void loop(void) {
     }
 
     char c = Serial.read();
-    serialData += c;
-    lastCharTime = millis(); // veri geldi, zamanı güncelle
+    // Sadece yazdırılabilir karakterleri ve boşlukları al (ASCII 32-126)
+    if (c >= 32 && c <= 126) {
+      serialData += c;
+      lastCharTime = millis(); // veri geldi, zamanı güncelle
+    } else if (c == '\n' || c == '\r') {
+      // Satır sonu karakterlerini de al
+      serialData += c;
+      lastCharTime = millis();
+    }
+    // Kontrol karakterlerini (0-31) atla (127 de atlanır)
   }
 
-  // 2. Zaman kontrolü (2 saniye boyunca veri gelmediyse)
+  // 2. Zaman kontrolü (200ms boyunca veri gelmediyse)
   if (serialData.length() > 0 && millis() - lastCharTime > timeoutDuration) {
-    printToEscPos(serialData);
+    // Veriyi büyük harfe çevir ve ara (büyük/küçük harf duyarsız)
+    String upperData = serialData;
+    upperData.toUpperCase();
+    
+    // "FISCAL" kontrolü (büyük harfe çevrilmiş versiyonda)
+    int fiscalPos = upperData.indexOf("FISCAL");
+    
+    if (fiscalPos != -1) {
+      printToEscPos(serialData); // Orijinal veriyi yazdır
+    }     
+    // Kayıtçıyı her durumda temizle
     serialData = "";
-    beepYapildi = false;  // ⏪ Sonraki paket için sıfırla
+    beepYapildi = false;
   }
 #endif
 #ifdef SERITOUSB

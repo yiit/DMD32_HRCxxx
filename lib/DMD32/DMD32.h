@@ -40,9 +40,21 @@ LED Panel Layout in RAM
 //Arduino toolchain header, version dependent
 #include "Arduino.h"
 
-
 //SPI library must be included for the SPI scanning/connection method to the DMD
 #include <SPI.h>
+
+// Arduino 3.x Compatibility Layer
+#if ARDUINO >= 30100
+  // Arduino 3.x and newer (3.1.0+) - VSPI is now SPI2, GPIO API değişti
+  #ifndef VSPI
+    #define VSPI SPI2
+  #endif
+  #include "driver/gpio.h"  // Arduino 3.x GPIO API
+  #define DMD32_ARDUINO_3X_COMPATIBLE
+#else
+  // Arduino 2.x - VSPI is available, standart GPIO
+  #define DMD32_ARDUINO_2X_COMPATIBLE
+#endif
 
 // ######################################################################################################################
 // ######################################################################################################################
@@ -60,7 +72,18 @@ LED Panel Layout in RAM
 // ######################################################################################################################
 // ######################################################################################################################
 
-//DMD I/O pin macros
+//DMD I/O pin macros - Arduino 2.x/3.x uyumlu
+#if ARDUINO >= 30000
+// Arduino 3.x - Optimize edilmiş GPIO makroları
+#define LIGHT_DMD_ROW_01_05_09_13()       	{ gpio_set_level((gpio_num_t)PIN_DMD_B, 0); gpio_set_level((gpio_num_t)PIN_DMD_A, 0); }
+#define LIGHT_DMD_ROW_02_06_10_14()       	{ gpio_set_level((gpio_num_t)PIN_DMD_B, 0); gpio_set_level((gpio_num_t)PIN_DMD_A, 1); }
+#define LIGHT_DMD_ROW_03_07_11_15()       	{ gpio_set_level((gpio_num_t)PIN_DMD_B, 1); gpio_set_level((gpio_num_t)PIN_DMD_A, 0); }
+#define LIGHT_DMD_ROW_04_08_12_16()       	{ gpio_set_level((gpio_num_t)PIN_DMD_B, 1); gpio_set_level((gpio_num_t)PIN_DMD_A, 1); }
+#define LATCH_DMD_SHIFT_REG_TO_OUTPUT()	{ gpio_set_level((gpio_num_t)PIN_DMD_SCLK, 1); gpio_set_level((gpio_num_t)PIN_DMD_SCLK, 0); }
+#define OE_DMD_ROWS_OFF()                 		{ gpio_set_level((gpio_num_t)PIN_DMD_nOE, 0); }
+#define OE_DMD_ROWS_ON()                  		{ gpio_set_level((gpio_num_t)PIN_DMD_nOE, 1); }
+#else
+// Arduino 2.x - Standart digitalWrite makroları
 #define LIGHT_DMD_ROW_01_05_09_13()       	{ digitalWrite( PIN_DMD_B,  LOW ); digitalWrite( PIN_DMD_A,  LOW ); }
 #define LIGHT_DMD_ROW_02_06_10_14()       	{ digitalWrite( PIN_DMD_B,  LOW ); digitalWrite( PIN_DMD_A, HIGH ); }
 #define LIGHT_DMD_ROW_03_07_11_15()       	{ digitalWrite( PIN_DMD_B, HIGH ); digitalWrite( PIN_DMD_A,  LOW ); }
@@ -68,6 +91,7 @@ LED Panel Layout in RAM
 #define LATCH_DMD_SHIFT_REG_TO_OUTPUT()	{ digitalWrite( PIN_DMD_SCLK, HIGH ); digitalWrite( PIN_DMD_SCLK,  LOW ); }
 #define OE_DMD_ROWS_OFF()                 		{ digitalWrite( PIN_DMD_nOE, LOW  ); }
 #define OE_DMD_ROWS_ON()                  		{ digitalWrite( PIN_DMD_nOE, HIGH ); }
+#endif
 
 //Pixel/graphics writing modes (bGraphicsMode)
 #define GRAPHICS_NORMAL	0
@@ -82,12 +106,41 @@ LED Panel Layout in RAM
 #define PATTERN_STRIPE_0	2
 #define PATTERN_STRIPE_1	3
 
-//display screen (and subscreen) sizing
+//display screen (and subscreen) sizing - Çoklu panel boyut desteği
+// Varsayılan: 32x16 HUB12 P10 panelleri
+#ifndef DMD_PIXELS_ACROSS
 #define DMD_PIXELS_ACROSS	32      //pixels across x axis (base 2 size expected)
+#endif
+
+#ifndef DMD_PIXELS_DOWN  
 #define DMD_PIXELS_DOWN	16      //pixels down y axis
+#endif
+
+// Panel boyut konfigürasyonları - uncomment istenen boyutu
+// #define DMD_PANEL_64x32  // 64x32 büyük panel için
+// #define DMD_PANEL_64x16  // 64x16 geniş panel için  
+// #define DMD_PANEL_32x32  // 32x32 kare panel için
+
+#ifdef DMD_PANEL_64x32
+#undef DMD_PIXELS_ACROSS
+#undef DMD_PIXELS_DOWN
+#define DMD_PIXELS_ACROSS	64
+#define DMD_PIXELS_DOWN	32
+#endif
+
+#ifdef DMD_PANEL_64x16
+#undef DMD_PIXELS_ACROSS
+#define DMD_PIXELS_ACROSS	64
+#endif
+
+#ifdef DMD_PANEL_32x32
+#undef DMD_PIXELS_DOWN
+#define DMD_PIXELS_DOWN	32
+#endif
+
 #define DMD_BITSPERPIXEL		1      //1 bit per pixel, use more bits to allow for pwm screen brightness control
 #define DMD_RAM_SIZE_BYTES	((DMD_PIXELS_ACROSS*DMD_BITSPERPIXEL/8)*DMD_PIXELS_DOWN)
-                                  // (32x * 1 / 8) = 4 bytes, * 16y = 64 bytes per screen here.
+                                  // Calculated: (pixelsX * 1bpp / 8) * pixelsY bytes per screen
 //lookup table for DMD::writePixel to make the pixel indexing routine faster
 static byte bPixelLookupTable[8] =
 {
